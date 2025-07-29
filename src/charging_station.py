@@ -1,5 +1,6 @@
 import json
 from typing import List, Dict, Any
+from collections import deque
 
 class Connection:
     def __init__(self, power_kw: float, current_type_id: int = None, 
@@ -21,6 +22,7 @@ class EVChargingStation:
         self.longitude = longitude
         self.number_of_points = number_of_points
         self.connections = connections
+        self.charging_queue = deque()  # Queue for charging
     
     # Getters
     def get_station_id(self):
@@ -41,6 +43,9 @@ class EVChargingStation:
     def get_position(self):
         return (self.longitude, self.latitude)
     
+    def get_charging_queue(self):
+        return self.charging_queue
+    
     # Setters
     def set_station_id(self, station_id: str): 
         self.station_id = station_id
@@ -57,6 +62,21 @@ class EVChargingStation:
     def set_connections(self, connections: List[Connection]):
         self.connections = connections
     
+    # Queue methods
+    def add_to_queue(self, driver):
+        """Add a driver to the charging queue"""
+        self.charging_queue.append(driver)
+    
+    def remove_from_queue(self):
+        """Remove and return the next driver from the queue"""
+        if self.charging_queue:
+            return self.charging_queue.popleft()
+        return None
+    
+    def get_queue_length(self):
+        """Get the current length of the charging queue"""
+        return len(self.charging_queue)
+    
     @classmethod
     def from_json(cls, json_data: Dict[str, Any]):
         """Create EVChargingStation from JSON data"""
@@ -72,7 +92,7 @@ class EVChargingStation:
         ]
         
         return cls(
-            station_id=json_data.get('StationID'),  # Changed from 'ID'
+            station_id=json_data.get('StationID'),
             latitude=json_data.get('Latitude'),
             longitude=json_data.get('Longitude'),
             number_of_points=json_data.get('NumberOfPoints', 1),
@@ -80,7 +100,7 @@ class EVChargingStation:
         )
     
     def __str__(self):
-        return f"EVChargingStation(ID={self.station_id}, Lat={self.latitude}, Lon={self.longitude}, Points={self.number_of_points})"
+        return f"EVChargingStation(ID={self.station_id}, Lat={self.latitude}, Lon={self.longitude}, Points={self.number_of_points}, Queue={self.get_queue_length()})"
 
 def load_stations_from_json(json_file_path: str) -> List[EVChargingStation]:
     """Load charging stations from JSON file"""
