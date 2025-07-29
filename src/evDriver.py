@@ -111,41 +111,20 @@ class EVDriver:
             return float('inf')
     
     # Battery management methods
-    def needs_charging(self, remaining_distance, battery_range):
-        """
-        Check if the driver needs to charge to reach destination
-        
-        Args:
-            remaining_distance: Number of hops to destination
-            battery_range: Maximum hops possible with full battery
-            
-        Returns:
-            bool: True if charging is needed
-        """
-        current_range = self.get_current_range(battery_range)
-        return current_range < remaining_distance
-    
-    def get_current_range(self, battery_range):
-        """
-        Get current range based on battery level
-        
-        Args:
-            battery_range: Maximum hops possible with full battery
-            
-        Returns:
-            int: Number of hops possible with current battery
-        """
-        return int(battery_range * self.state_of_charge)
-    
-    def update_battery(self, consumption_per_hop):
-        """
-        Update battery level after consuming energy
-        
-        Args:
-            consumption_per_hop: Battery consumption per hop (e.g., 1/50 = 0.02)
-        """
-        self.state_of_charge -= consumption_per_hop
-        self.state_of_charge = max(0.0, self.state_of_charge)  # Don't go below 0
+    # Simplified battery methods:
+    def consume_battery(self, consumption):
+     """Consume battery energy"""
+     self.state_of_charge -= consumption
+     self.state_of_charge = max(0.0, self.state_of_charge)
+
+    def get_range_remaining(self, max_range):
+     """Get remaining travel range in hops"""
+     return int(max_range * self.state_of_charge)
+
+    @property
+    def battery_percentage(self):
+     """Get battery level as percentage for display"""
+     return self.state_of_charge * 100
     
     def set_battery_level(self, new_soc):
         """
@@ -156,9 +135,7 @@ class EVDriver:
         """
         self.state_of_charge = max(0.0, min(1.0, new_soc))  # Clamp between 0 and 1
     
-    def get_battery_percentage(self):
-        """Get battery level as percentage"""
-        return self.state_of_charge * 100
+ 
     
     def is_battery_empty(self):
         """Check if battery is empty"""

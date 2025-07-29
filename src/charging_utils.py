@@ -64,7 +64,7 @@ def get_station_capacity(charging_stations):
     """
     return sum(station.get_number_of_points() for station in charging_stations)
 
-def charge_at_station(env, car_id, node, graph, stats, target_soc=1.0):
+def charge_at_station(env, car_id, node, graph, stats, driver, target_soc=1.0):
     """
     Handle charging at a station using SimPy's automatic queuing
     
@@ -74,6 +74,7 @@ def charge_at_station(env, car_id, node, graph, stats, target_soc=1.0):
         node: Node with charging station
         graph: NetworkX graph with charging stations
         stats: Statistics dictionary to update
+        driver: EVDriver object to update battery level
         target_soc: Target state of charge after charging
         
     Yields:
@@ -91,6 +92,10 @@ def charge_at_station(env, car_id, node, graph, stats, target_soc=1.0):
     stations = graph.nodes[node]['charging_stations']
     total_capacity = get_station_capacity(stations)
     
+    # Get current battery level from driver
+    current_soc = driver.get_state_of_charge()
+    print(f"[T={env.now:.1f}] Car {car_id}: Current battery: {current_soc:.2f} ({current_soc*100:.0f}%), target: {target_soc:.2f} ({target_soc*100:.0f}%)")
+    
     # Request charging point - SimPy automatically handles the queue
     with charging_resource.request() as request:
         # Check queue status
@@ -104,11 +109,19 @@ def charge_at_station(env, car_id, node, graph, stats, target_soc=1.0):
         # Start charging (we got a charging point)
         print(f"[T={env.now:.1f}] Car {car_id}: Started charging at node {node} (capacity: {total_capacity})")
         
-        # Calculate charging time (simplified: assume current SoC is 0 for full charge time)
-        charging_time = calculate_charging_time(0.0, target_soc)
-        yield env.timeout(charging_time)
+        # Calculate charging time based on actual current and target SoC
+        charging_time = calculate_charging_time(current_soc, target_soc)
         
-        print(f"[T={env.now:.1f}] Car {car_id}: Finished charging at node {node} (charged to {target_soc*100:.0f}%)")
+        if charging_time > 0:
+            print(f"[T={env.now:.1f}] Car {car_id}: Charging for {charging_time:.1f} time units (from {current_soc*100:.0f}% to {target_soc*100:.0f}%)")
+            yield env.timeout(charging_time)
+            
+            # Update driver's battery level
+            driver.set_battery_level(target_soc)
+            print(f"[T={env.now:.1f}] Car {car_id}: Finished charging at node {node} (battery now: {target_soc*100:.0f}%)")
+        else:
+            print(f"[T={env.now:.1f}] Car {car_id}: No charging needed (already at target level)")
+        
         stats['total_charging_events'] += 1
         
         # Resource is automatically released when exiting the 'with' block

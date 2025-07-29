@@ -16,7 +16,7 @@ def get_shortest_path(graph, source_node, destination_node):
     try:
         path = nx.shortest_path(graph, source_node, destination_node)
         if path:
-            print(f"    Path calculated from {source_node} to {destination_node}: {path[:5]}{'...' if len(path) > 5 else ''} (total: {len(path)} nodes, {len(path)-1} hops)")
+            print(f"Path calculated from {source_node} to {destination_node}: {path[:5]}{'...' if len(path) > 5 else ''} (total: {len(path)} nodes, {len(path)-1} hops)")
         return path
     except (nx.NetworkXNoPath, nx.NodeNotFound):
         print(f"    No path found from {source_node} to {destination_node}")
@@ -201,6 +201,6 @@ def travel_to_next_node(env, car_id, driver, travel_time_per_hop=1.0, battery_ra
     
     # Update battery
     consumption_per_hop = 1.0 / battery_range
-    driver.update_battery(consumption_per_hop)
+    driver.consume_battery(consumption_per_hop)
     
-    print(f"[T={env.now:.1f}] Car {car_id}: Moved to node {next_node}, SoC: {driver.get_state_of_charge():.2f} ({driver.get_battery_percentage():.0f}%)")
+    print(f"[T={env.now:.1f}] Car {car_id}: Moved to node {next_node}, SoC: {driver.get_state_of_charge():.2f} ({driver.battery_percentage:.0f}%)")

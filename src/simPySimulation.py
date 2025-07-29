@@ -63,7 +63,7 @@ class SimpleEVSimulation:
         print(f"[T={self.env.now:.1f}] Car {car_id}: Total distance: {len(path)-1} hops")
         
         total_distance = len(path) - 1
-        print(f"[T={self.env.now:.1f}] Car {car_id}: Can travel {driver.get_current_range(battery_range)} hops with current battery")
+        print(f"[T={self.env.now:.1f}] Car {car_id}: Can travel {driver.get_range_remaining(battery_range)} hops with current battery")
         print(f"[T={self.env.now:.1f}] Car {car_id}: Need to travel {total_distance} hops total")
         
         # Check if we need charging before even starting
@@ -113,8 +113,8 @@ class SimpleEVSimulation:
             battery_range: Maximum range with full battery
         """
         current_node = driver.get_current_node()
-        current_range = driver.get_current_range(battery_range)
-        planned_route = driver.get_current_path()  # Get the planned route
+        current_range = driver.get_range_remaining(battery_range)
+        planned_route = driver.get_current_path()  
         
         # Find best charging station considering the planned route
         charging_node = find_nearest_charging_station(
@@ -125,16 +125,14 @@ class SimpleEVSimulation:
             print(f"[T={self.env.now:.1f}] Car {car_id}: No charging station within range! STRANDED!")
             return
         
-        print(f"[T={self.env.now:.1f}] Car {car_id}: Found charging station at node {charging_node}")
-        
         # Travel to charging station if not already there
         if charging_node != current_node:
             yield from travel_to_charging_station(self.env, car_id, current_node, charging_node, self.graph)
-            driver.update_battery(0.02)  # Small battery consumption for detour
+            driver.consume_battery(0.02)  # Small battery consumption for detour
         
         # Charge at the station
-        yield from charge_at_station(self.env, car_id, charging_node, self.graph, self.stats)
-        driver.set_battery_level(1.0)  # Full charge after charging
+        yield from charge_at_station(self.env, car_id, charging_node, self.graph, self.stats, driver, target_soc=1.0)
+        # Note: driver's battery level is updated inside charge_at_station function
         
         # Recalculate path from charging station to destination
         print(f"[T={self.env.now:.1f}] Car {car_id}: Recalculating route from charging station {charging_node} to destination {driver.get_destination_node()}")
@@ -146,54 +144,38 @@ class SimpleEVSimulation:
         
         print(f"[T={self.env.now:.1f}] Car {car_id}: New route from charging station: {len(new_path)} stops, {len(new_path)-1} hops remaining")
     
-    def spawn_single_car(self):
-        """Spawn one car for testing"""
-        # Get random source and destination from nodes with good connectivity
+    def spawn_multiple_cars(self, num_cars):
+        """Spawn multiple cars for testing"""
         all_nodes = list(self.graph.nodes)
+
+        for car_id in range(1, num_cars + 1):
+            # Pick random source and destination
+            while True:
+                source = random.choice(all_nodes)
+                destination = random.choice(all_nodes)
         
-        # Try to pick nodes that are reasonably far apart
-        while True:
-            source = random.choice(all_nodes)
-            destination = random.choice(all_nodes)
-            
-            if source != destination:
-                # Check if path exists and is reasonable length
-                test_driver = EVDriver(source, destination, 1.0, 20)
-                path = test_driver.find_shortest_path(self.graph)
-                if path and 10 <= len(path) <= 30:  # Longer distance to force charging
-                    break
+                if source != destination:
+                    test_driver = EVDriver(source, destination, 1.0, 20)
+                    path = test_driver.find_shortest_path(self.graph)
+                    if path and 10 <= len(path) <= 30:
+                     break
+    
+            # These lines should be INSIDE the for loop
+            initial_soc = random.uniform(0.1, 0.3)
+            connector_type = random.choice([10, 20, 30])
         
-        # Create car with very low battery to force charging
-        initial_soc = 0.2  # 20% battery (can only travel 10 hops with 50 max range)
-        connector_type = 20  # Standard connector
+            print(f"Spawning car {car_id} from {source} to {destination} with SoC {initial_soc:.2f}")
         
-        print(f"Spawning car from {source} to {destination} with SoC {initial_soc}")
-        print(f"Route distance will be: {len(path)-1} hops")
-        print(f"Car can travel: {int(50 * initial_soc)} hops with current battery")
-        
-        # Start the car process
-        self.env.process(self.car_process(1, source, destination, initial_soc, connector_type))
-        self.stats['cars_spawned'] += 1
+            self.env.process(self.car_process(car_id, source, destination, initial_soc, connector_type))
+            self.stats['cars_spawned'] += 1
     
     def run_simulation(self):
         """Run the simulation"""
         print("=== Starting Simple SimPy EV Simulation ===")
         print(f"Graph has {len(self.graph.nodes)} nodes")
         
-        # Count existing charging stations
-        charging_nodes = [node for node in self.graph.nodes 
-                         if len(self.graph.nodes[node]['charging_stations']) > 0]
-        print(f"Using existing charging stations at {len(charging_nodes)} nodes")
-        
-        # Show some charging station details
-        print("Sample charging stations:")
-        for i, node in enumerate(charging_nodes[:5]):  # Show first 5
-            stations = self.graph.nodes[node]['charging_stations']
-            total_points = sum(station.get_number_of_points() for station in stations)
-            print(f"  Node {node}: {len(stations)} stations, {total_points} charging points")
-        
         # Spawn one car
-        self.spawn_single_car()
+        self.spawn_multiple_cars(num_cars=10000)
         
         # Run simulation
         if self.simulation_time:
@@ -210,7 +192,7 @@ class SimpleEVSimulation:
         print(f"Total charging events: {self.stats['total_charging_events']}")
         
         if self.stats['cars_completed'] == 0 and self.stats['cars_spawned'] > 0:
-            print("⚠️  No cars completed their journey - they may be stranded or need more time!")
+            print("No cars completed their journey - they may be stranded or need more time!")
 
 def main():
     """Main function to run the simple simulation"""
