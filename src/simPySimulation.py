@@ -175,7 +175,7 @@ class SimpleEVSimulation:
         print(f"Graph has {len(self.graph.nodes)} nodes")
         
         # Spawn one car
-        self.spawn_multiple_cars(num_cars=10000)
+        self.spawn_multiple_cars(num_cars=50)
         
         # Run simulation
         if self.simulation_time:
