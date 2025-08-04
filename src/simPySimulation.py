@@ -56,43 +56,46 @@ class SimpleEVSimulation:
             print(f"[T={self.env.now:.1f}] Car {car_id}: No path found!")
             return
         
-        # Configuration
-        battery_range = 50  # Maximum nodes car can travel with full battery
+        # Configuration - battery range in kilometers
+        battery_range_km = 300  # Maximum km car can travel with full battery
         
         print(f"[T={self.env.now:.1f}] Car {car_id}: Route planned with {len(path)} stops")
-        print(f"[T={self.env.now:.1f}] Car {car_id}: Total distance: {len(path)-1} hops")
         
-        total_distance = len(path) - 1
-        print(f"[T={self.env.now:.1f}] Car {car_id}: Can travel {driver.get_range_remaining(battery_range)} hops with current battery")
-        print(f"[T={self.env.now:.1f}] Car {car_id}: Need to travel {total_distance} hops total")
+        # Calculate total distance using the weighted graph
+        total_distance_km = driver._calculate_path_distance(self.graph, path)
+        print(f"[T={self.env.now:.1f}] Car {car_id}: Total distance: {total_distance_km:.2f}km")
+        
+        current_range_km = driver.get_range_remaining(battery_range_km)
+        print(f"[T={self.env.now:.1f}] Car {car_id}: Can travel {current_range_km:.2f}km with current battery")
+        print(f"[T={self.env.now:.1f}] Car {car_id}: Need to travel {total_distance_km:.2f}km total")
         
         # Check if we need charging before even starting
-        remaining_distance = driver.get_remaining_distance(self.graph)
+        remaining_distance_km = driver.get_remaining_distance(self.graph)
         needs_charging, current_range, deficit = calculate_charging_needed(
-            driver.get_state_of_charge(), battery_range, remaining_distance
+            driver.get_state_of_charge(), battery_range_km, remaining_distance_km
         )
         
         if needs_charging:
-            print(f"[T={self.env.now:.1f}] Car {car_id}: Need charging! Current range ({current_range}) < total distance ({total_distance})")
-            yield from self._handle_charging_stop(car_id, driver, battery_range)
+            print(f"[T={self.env.now:.1f}] Car {car_id}: Need charging! Current range ({current_range:.2f}km) < total distance ({total_distance_km:.2f}km)")
+            yield from self._handle_charging_stop(car_id, driver, battery_range_km)
         
         # Main journey loop - high level orchestration
         while not driver.has_reached_destination():
             current_node = driver.get_current_node()
             
             # Check if charging needed before next move
-            remaining_distance = driver.get_remaining_distance(self.graph)
+            remaining_distance_km = driver.get_remaining_distance(self.graph)
             needs_charging, current_range, deficit = calculate_charging_needed(
-                driver.get_state_of_charge(), battery_range, remaining_distance
+                driver.get_state_of_charge(), battery_range_km, remaining_distance_km
             )
             
             if needs_charging:
-                print(f"[T={self.env.now:.1f}] Car {car_id}: Need charging! Range({current_range}) < Distance({remaining_distance})")
-                yield from self._handle_charging_stop(car_id, driver, battery_range)
+                print(f"[T={self.env.now:.1f}] Car {car_id}: Need charging! Range({current_range:.2f}km) < Distance({remaining_distance_km:.2f}km)")
+                yield from self._handle_charging_stop(car_id, driver, battery_range_km)
                 continue  # Restart loop after charging
             
             # Travel to next node
-            yield from travel_to_next_node(self.env, car_id, driver, travel_time_per_hop=1.0, battery_range=battery_range)
+            yield from travel_to_next_node(self.env, car_id, driver, self.graph, travel_time_per_km=0.01, battery_range_km=battery_range_km)
             
             # Check if we've somehow run out of battery (safety check)
             if driver.is_battery_empty():
@@ -103,22 +106,22 @@ class SimpleEVSimulation:
         print(f"[T={self.env.now:.1f}] Car {car_id}: Reached destination {destination_node}!")
         self.stats['cars_completed'] += 1
     
-    def _handle_charging_stop(self, car_id, driver, battery_range):
+    def _handle_charging_stop(self, car_id, driver, battery_range_km):
         """
         Handle the complete charging process including travel to station
         
         Args:
             car_id: Car identifier
             driver: EVDriver object
-            battery_range: Maximum range with full battery
+            battery_range_km: Maximum range with full battery in kilometers
         """
         current_node = driver.get_current_node()
-        current_range = driver.get_range_remaining(battery_range)
+        current_range_km = driver.get_range_remaining(battery_range_km)
         planned_route = driver.get_current_path()  
         
         # Find best charging station considering the planned route
         charging_node = find_nearest_charging_station(
-            self.graph, current_node, planned_route, current_range
+            self.graph, current_node, planned_route, current_range_km
         )
         
         if charging_node is None:
@@ -142,7 +145,8 @@ class SimpleEVSimulation:
             print(f"[T={self.env.now:.1f}] Car {car_id}: No path from charging station!")
             return
         
-        print(f"[T={self.env.now:.1f}] Car {car_id}: New route from charging station: {len(new_path)} stops, {len(new_path)-1} hops remaining")
+        new_distance_km = driver._calculate_path_distance(self.graph, new_path)
+        print(f"[T={self.env.now:.1f}] Car {car_id}: New route from charging station: {len(new_path)} stops, {new_distance_km:.2f}km remaining")
     
     def spawn_multiple_cars(self, num_cars):
         """Spawn multiple cars for testing"""
@@ -157,8 +161,11 @@ class SimpleEVSimulation:
                 if source != destination:
                     test_driver = EVDriver(source, destination, 1.0, 20)
                     path = test_driver.find_shortest_path(self.graph)
-                    if path and 10 <= len(path) <= 30:
-                     break
+                    if path:
+                        # Check distance instead of hop count
+                        distance_km = test_driver._calculate_path_distance(self.graph, path)
+                        if 50 <= distance_km <= 200:  # 50-200km trips
+                            break
     
             # These lines should be INSIDE the for loop
             initial_soc = random.uniform(0.1, 0.3)
@@ -174,8 +181,8 @@ class SimpleEVSimulation:
         print("=== Starting Simple SimPy EV Simulation ===")
         print(f"Graph has {len(self.graph.nodes)} nodes")
         
-        # Spawn one car
-        self.spawn_multiple_cars(num_cars=50)
+        # Spawn cars
+        self.spawn_multiple_cars(num_cars=5)  # Reduced for testing
         
         # Run simulation
         if self.simulation_time:

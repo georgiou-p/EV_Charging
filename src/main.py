@@ -1,9 +1,9 @@
 from station_assignment import assign_charging_stations_to_nodes
-from visualization import visualize_stations_on_map, print_assignment_summary
+from visualization import visualize_stations_on_map, print_assignment_summary, visualize_complete_graph
 
 def main():
     """
-    Main function to run the entire charging station assignment process
+    Main function to run the charging station assignment and visualization
     """
     
     print("Starting EV Charging Station Assignment Process...")
@@ -13,14 +13,14 @@ def main():
     stations_json_path = "data/cleanedM_charging_stations.json"
     
     try:
-        # Assign charging stations to graph nodes using cKDTree
+        # Assign charging stations to graph nodes
         graph, node_stations = assign_charging_stations_to_nodes(
             geojson_path, 
             stations_json_path
         )
         
         if graph is not None:
-            # Print summary
+            # Print summary with edge weight statistics
             print_assignment_summary(graph)
             
             # Check assignment results
@@ -32,17 +32,24 @@ def main():
             print(f"Nodes with charging stations: {len(nodes_with_stations)} out of {len(graph.nodes)}")
             print(f"Total charging stations assigned: {total_assigned}")
             
-            # Test 
-            node = 300
-            stations = graph.nodes[node]['charging_stations']
-            station = stations[0]
-            print(station.get_station_id())
-            connections = station.get_connections()
-            print(connections[0])
+            # Test existing functionality
+            if nodes_with_stations:
+                node = nodes_with_stations[0]
+                stations = graph.nodes[node]['charging_stations']
+                station = stations[0]
+                print(f"Sample station ID: {station.get_station_id()}")
+                connections = station.get_connections()
+                if connections:
+                    print(f"Sample connection: {connections[0]}")
             
-            # Create visualization
-            print("\nCreating visualization...")
-            visualize_stations_on_map(graph, geojson_path)
+            # === VISUALIZATION ===
+            print("\n" + "="*60)
+            print("CREATING COMPLETE VISUALIZATION")
+            print("="*60)
+            
+            # Complete visualization showing both charging stations AND edge weights
+            print("Creating complete graph with charging stations and edge weights...")
+            visualize_complete_graph(graph, geojson_path)
             
             print("\n Process completed successfully!")
             return graph, node_stations
@@ -56,6 +63,8 @@ def main():
         
     except Exception as e:
         print(f"An error occurred during processing: {e}")
+        import traceback
+        traceback.print_exc()
         return None, None
 
 if __name__ == "__main__":

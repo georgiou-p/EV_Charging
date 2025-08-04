@@ -6,18 +6,20 @@ import networkx as nx
 import geopandas
 from collections import defaultdict
 from charging_station import EVChargingStation
+from haversine import haversine, Unit
 
 def assign_charging_stations_to_nodes(geojson_path, charging_data_path):
     """
     Assign charging stations to the nearest nodes in a graph created from UK districts.
     Uses EVChargingStation class objects instead of dictionaries.
+    Graph edges are weighted by distance between centroids.
     
     Args:
         geojson_path (str): Path to the UK districts GeoJSON file
         charging_data_path (str): Path to the charging stations JSON file
     
     Returns:
-        networkx.Graph: Graph with charging station objects assigned to nodes
+        networkx.Graph: Graph with charging station objects assigned to nodes and weighted edges
         dict: Dictionary mapping node IDs to lists of EVChargingStation objects
     """
     
@@ -33,6 +35,18 @@ def assign_charging_stations_to_nodes(geojson_path, charging_data_path):
     
     # Create positions dictionary for nodes
     positions = dict(zip(graph.nodes, centroids))
+    
+    # Add weights to edges based on Haversine distance in kilometers
+    for edge in graph.edges():
+        node1, node2 = edge
+        pos1 = positions[node1]  # (longitude, latitude)
+        pos2 = positions[node2]  # (longitude, latitude)
+        
+        # Calculate Haversine distance using library - expects (lat, lon) format
+        distance_km = haversine((pos1[1], pos1[0]), (pos2[1], pos2[0]), unit=Unit.KILOMETERS)
+        
+        # Add distance as weight to the edge
+        graph.edges[node1, node2]['weight'] = distance_km
     
     # Load charging station data
     with open(charging_data_path, 'r', encoding='utf-8') as f:
@@ -82,6 +96,13 @@ def assign_charging_stations_to_nodes(geojson_path, charging_data_path):
         graph.nodes[node]['charging_stations'] = node_charging_stations.get(node, [])
         graph.nodes[node]['position'] = positions[node]
     
+    # Manual edge addition: 322 <-> 323
+    pos1 = positions[322]
+    pos2 = positions[323]
+    distance_km = haversine((pos1[1], pos1[0]), (pos2[1], pos2[0]), unit=Unit.KILOMETERS)
+    graph.add_edge(322, 323, weight=distance_km)
+    
     print(f"Successfully assigned {assigned_count} charging stations to {len([n for n in node_charging_stations])} nodes")
+    print(f"Graph has weighted edges in kilometers. Sample weights: {[(edge[0], edge[1], f'{edge[2]['weight']:.2f}km') for edge in list(graph.edges(data=True))[:3]]}")
     
     return graph, dict(node_charging_stations)

@@ -59,15 +59,17 @@ class EVDriver:
     
     # Path traversal methods
     def find_shortest_path(self, graph):
-        """Find the shortest path from source to destination using NetworkX"""
+        """Find the shortest path from source to destination using NetworkX with weighted edges"""
         try:
-            path = nx.shortest_path(graph, self.source_node, self.destination_node)
+            path = nx.shortest_path(graph, self.source_node, self.destination_node, weight='weight')
             self.current_path = path
             self.current_position_index = 0
             if path:
+                # Calculate total distance in km
+                total_distance_km = self._calculate_path_distance(graph, path)
                 print(f"    Route calculated from {self.source_node} to {self.destination_node}:")
                 print(f"    Full path: {path[:10]}{'...' if len(path) > 10 else ''}")
-                print(f"    Total distance: {len(path)-1} hops through {len(path)} nodes")
+                print(f"    Total distance: {total_distance_km:.2f}km through {len(path)} nodes")
             return path
         except nx.NetworkXNoPath:
             print(f"No path found from {self.source_node} to {self.destination_node}")
@@ -75,6 +77,15 @@ class EVDriver:
         except nx.NodeNotFound as e:
             print(f"Node not found in graph: {e}")
             return None
+    
+    def _calculate_path_distance(self, graph, path):
+        """Calculate total distance in km for a given path"""
+        total_distance = 0.0
+        for i in range(len(path) - 1):
+            node1, node2 = path[i], path[i + 1]
+            if graph.has_edge(node1, node2):
+                total_distance += graph.edges[node1, node2]['weight']
+        return total_distance
     
     def get_current_node(self):
         """Get the current node in the path"""
@@ -97,16 +108,16 @@ class EVDriver:
                 self.get_current_node() == self.destination_node)
     
     def get_remaining_distance(self, graph):
-        """Get the remaining distance to destination"""
+        """Get the remaining distance to destination in kilometers"""
         if not self.current_path or self.current_position_index >= len(self.current_path):
-            return 0
+            return 0.0
         
         current_node = self.get_current_node()
         if current_node == self.destination_node:
-            return 0
+            return 0.0
         
         try:
-            return nx.shortest_path_length(graph, current_node, self.destination_node)
+            return nx.shortest_path_length(graph, current_node, self.destination_node, weight='weight')
         except (nx.NetworkXNoPath, nx.NodeNotFound):
             return float('inf')
     
@@ -117,9 +128,9 @@ class EVDriver:
      self.state_of_charge -= consumption
      self.state_of_charge = max(0.0, self.state_of_charge)
 
-    def get_range_remaining(self, max_range):
-     """Get remaining travel range in hops"""
-     return int(max_range * self.state_of_charge)
+    def get_range_remaining(self, max_range_km):
+     """Get remaining travel range in kilometers"""
+     return max_range_km * self.state_of_charge
 
     @property
     def battery_percentage(self):
