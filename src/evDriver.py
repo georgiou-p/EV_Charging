@@ -17,6 +17,7 @@ class EVDriver:
         self.connector_type = connector_type
         self.current_path = []
         self.current_position_index = 0
+        self.charging_anxiety_threshold = 0.5  # 50% SoC anxiety threshold
     
     # Getters
     def get_source_node(self):
@@ -37,6 +38,9 @@ class EVDriver:
     def get_current_position_index(self):
         return self.current_position_index
     
+    def get_charging_anxiety_threshold(self):
+        return self.charging_anxiety_threshold
+    
     # Setters
     def set_source_node(self, source_node):
         self.source_node = source_node
@@ -56,6 +60,10 @@ class EVDriver:
     
     def set_current_position_index(self, index):
         self.current_position_index = index
+    
+    def set_charging_anxiety_threshold(self, threshold):
+        """Set the SoC threshold at which driver becomes anxious about charging"""
+        self.charging_anxiety_threshold = max(0.0, min(1.0, threshold))
     
     # Path traversal methods
     def find_shortest_path(self, graph):
@@ -121,21 +129,126 @@ class EVDriver:
         except (nx.NetworkXNoPath, nx.NodeNotFound):
             return float('inf')
     
+    def can_reach_next_node(self, graph, battery_range_km):
+        """
+        Check if the car can reach the next node in its path
+        
+        Args:
+            graph: NetworkX graph
+            battery_range_km: Maximum range with full battery
+            
+        Returns:
+            bool: True if car can reach next node, False otherwise
+        """
+        current_node = self.get_current_node()
+        current_path = self.get_current_path()
+        current_index = self.get_current_position_index()
+        
+        # If we're at the destination, return True
+        if self.has_reached_destination():
+            return True
+        
+        # If no path or at end of path, return True (no next node to reach)
+        if not current_path or current_index >= len(current_path) - 1:
+            return True
+        
+        # Get next node
+        next_node = current_path[current_index + 1]
+        
+        # Check if edge exists and get distance
+        if graph.has_edge(current_node, next_node):
+            edge_distance_km = graph.edges[current_node, next_node]['weight']
+            current_range_km = self.get_range_remaining(battery_range_km)
+            
+            # Add small safety margin
+            required_range_km = edge_distance_km * 1.1  # 10% safety margin
+            
+            return current_range_km >= required_range_km
+        
+        return False  # No edge exists
+    
+    def is_anxious_about_charging(self):
+        """
+        Check if driver is anxious about charging (SoC below anxiety threshold)
+        
+        Returns:
+            bool: True if driver is anxious about charging (SoC <= 50%)
+        """
+        return self.state_of_charge <= self.charging_anxiety_threshold
+    
+    def should_look_for_charging(self, graph, battery_range_km):
+        """
+        Determine if driver should start looking for charging based on anxiety threshold
+        and remaining journey requirements
+        
+        Args:
+            graph: NetworkX graph
+            battery_range_km: Maximum range with full battery
+            
+        Returns:
+            tuple: (should_charge: bool, reason: str)
+        """
+        current_soc = self.get_state_of_charge()
+        
+        # Critical battery - must charge immediately
+        if current_soc <= 0.1:  # 10% or less
+            return True, f"Critical battery level: {current_soc*100:.0f}%"
+        
+        # Can't reach next node - must charge immediately
+        if not self.can_reach_next_node(graph, battery_range_km):
+            return True, "Cannot reach next node"
+        
+        # Driver anxiety kicks in at 50% SoC
+        if self.is_anxious_about_charging():
+            remaining_distance_km = self.get_remaining_distance(graph)
+            current_range_km = self.get_range_remaining(battery_range_km)
+            
+            # If anxious AND can't complete journey, look for charging
+            if remaining_distance_km > current_range_km:
+                return True, f"Anxious at {current_soc*100:.0f}% SoC and cannot complete journey (need {remaining_distance_km:.1f}km, have {current_range_km:.1f}km range)"
+            
+            # If anxious but can complete journey, mention anxiety but don't charge yet
+            return False, f"Anxious at {current_soc*100:.0f}% SoC but can complete journey (need {remaining_distance_km:.1f}km, have {current_range_km:.1f}km range)"
+        
+        # Above anxiety threshold - continue driving
+        return False, f"Comfortable at {current_soc*100:.0f}% SoC (above {self.charging_anxiety_threshold*100:.0f}% anxiety threshold)"
+    
+    def needs_charging_for_journey(self, graph, battery_range_km):
+        """
+        Check if charging is needed to complete the remaining journey
+        
+        Args:
+            graph: NetworkX graph
+            battery_range_km: Maximum range with full battery
+            
+        Returns:
+            tuple: (needs_charging: bool, current_range: float, deficit: float, reason: str)
+        """
+        current_soc = self.get_state_of_charge()
+        current_range_km = self.get_range_remaining(battery_range_km)
+        remaining_distance_km = self.get_remaining_distance(graph)
+        
+        # Check if driver should look for charging based on anxiety + journey requirements
+        should_charge, reason = self.should_look_for_charging(graph, battery_range_km)
+        
+        deficit = max(0, remaining_distance_km - current_range_km)
+        
+        return should_charge, current_range_km, deficit, reason
+    
     # Battery management methods
-    # Simplified battery methods:
     def consume_battery(self, consumption):
-     """Consume battery energy"""
-     self.state_of_charge -= consumption
-     self.state_of_charge = max(0.0, self.state_of_charge)
+        """Consume battery energy"""
+        self.state_of_charge -= consumption
+        self.state_of_charge = max(0.0, self.state_of_charge)
 
     def get_range_remaining(self, max_range_km):
-     """Get remaining travel range in kilometers"""
-     return max_range_km * self.state_of_charge
+        """Get remaining travel range in kilometers"""
+        return max_range_km * self.state_of_charge
 
     @property
     def battery_percentage(self):
-     """Get battery level as percentage for display"""
-     return self.state_of_charge * 100
+        """Get battery level as percentage for display"""
+        return self.state_of_charge * 100
     
     def set_battery_level(self, new_soc):
         """
@@ -145,8 +258,6 @@ class EVDriver:
             new_soc: New state of charge (0.0 to 1.0)
         """
         self.state_of_charge = max(0.0, min(1.0, new_soc))  # Clamp between 0 and 1
-    
- 
     
     def is_battery_empty(self):
         """Check if battery is empty"""

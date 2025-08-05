@@ -1,18 +1,22 @@
 """
-Charging-related utilities for EV simulation
+Modified charging-related utilities for EV simulation with random station assignment
 """
+import random
 
 def get_charging_resource(graph, node):
     """
     Get the SimPy resource for charging at a specific node
+    This function is now deprecated since each station has its own resource
     
     Args:
         graph: NetworkX graph with charging stations
         node: Node ID to get charging resource for
         
     Returns:
-        simpy.Resource or None: Charging resource if available
+        simpy.Resource or None: Charging resource if available (deprecated)
     """
+    # This function is kept for backward compatibility but is no longer used
+    # Individual stations now have their own simpy_resource attribute
     if 'simpy_resource' in graph.nodes[node]:
         return graph.nodes[node]['simpy_resource']
     return None
@@ -64,9 +68,38 @@ def get_station_capacity(charging_stations):
     """
     return sum(station.get_number_of_points() for station in charging_stations)
 
-def charge_at_station(env, car_id, node, graph, stats, driver, target_soc=1.0):
+def choose_charging_station(charging_stations, selection_method="random"):
     """
-    Handle charging at a station using SimPy's automatic queuing
+    Choose which charging station to use based on different strategies
+    
+    Args:
+        charging_stations: List of EVChargingStation objects at the node
+        selection_method: "random", "shortest_queue", or "highest_capacity"
+        
+    Returns:
+        EVChargingStation: Selected charging station
+    """
+    if not charging_stations:
+        return None
+    
+    if selection_method == "random":
+        return random.choice(charging_stations)
+    
+    elif selection_method == "shortest_queue":
+        # Choose station with shortest queue
+        return min(charging_stations, key=lambda s: len(s.simpy_resource.queue) if hasattr(s, 'simpy_resource') else 0)
+    
+    elif selection_method == "highest_capacity":
+        # Choose station with most charging points
+        return max(charging_stations, key=lambda s: s.get_number_of_points())
+    
+    else:
+        # Default to random
+        return random.choice(charging_stations)
+
+def charge_at_station(env, car_id, node, graph, stats, driver, target_soc=1.0, selection_method="random"):
+    """
+    Handle charging at a station using individual station queues
     
     Args:
         env: SimPy environment
@@ -76,51 +109,64 @@ def charge_at_station(env, car_id, node, graph, stats, driver, target_soc=1.0):
         stats: Statistics dictionary to update
         driver: EVDriver object to update battery level
         target_soc: Target state of charge after charging
+        selection_method: How to choose station ("random", "shortest_queue", "highest_capacity")
         
     Yields:
         SimPy events for charging process
     """
     print(f"[T={env.now:.1f}] Car {car_id}: Need to charge at node {node}")
     
-    # Check if this node has charging stations
-    charging_resource = get_charging_resource(graph, node)
-    if not charging_resource:
-        print(f"[T={env.now:.1f}] Car {car_id}: No charging resource at node {node}!")
+    # Get charging stations at this node
+    stations = graph.nodes[node]['charging_stations']
+    if not stations:
+        print(f"[T={env.now:.1f}] Car {car_id}: No charging stations at node {node}!")
         return
     
-    # Get charging stations info for logging
-    stations = graph.nodes[node]['charging_stations']
-    total_capacity = get_station_capacity(stations)
+    # Choose which specific station to use
+    chosen_station = choose_charging_station(stations, selection_method)
+    if not chosen_station:
+        print(f"[T={env.now:.1f}] Car {car_id}: Could not choose a charging station at node {node}!")
+        return
+    
+    station_id = chosen_station.get_station_id()
+    station_capacity = chosen_station.get_number_of_points()
+    
+    # Check if this station has a SimPy resource
+    if not hasattr(chosen_station, 'simpy_resource'):
+        print(f"[T={env.now:.1f}] Car {car_id}: Station {station_id} has no SimPy resource!")
+        return
+    
+    print(f"[T={env.now:.1f}] Car {car_id}: Chose station {station_id} (capacity: {station_capacity} points)")
     
     # Get current battery level from driver
     current_soc = driver.get_state_of_charge()
     print(f"[T={env.now:.1f}] Car {car_id}: Current battery: {current_soc:.2f} ({current_soc*100:.0f}%), target: {target_soc:.2f} ({target_soc*100:.0f}%)")
     
-    # Request charging point - SimPy automatically handles the queue
-    with charging_resource.request() as request:
-        # Check queue status
-        queue_length = len(charging_resource.queue)
+    # Request charging point at the specific chosen station
+    with chosen_station.simpy_resource.request() as request:
+        # Check queue status for this specific station
+        queue_length = len(chosen_station.simpy_resource.queue)
         if queue_length > 0:
-            print(f"[T={env.now:.1f}] Car {car_id}: Waiting in queue (position {queue_length + 1}) at node {node}")
+            print(f"[T={env.now:.1f}] Car {car_id}: Waiting in queue (position {queue_length + 1}) at station {station_id}")
         
-        # Wait for an available charging point (automatic queuing)
+        # Wait for an available charging point at this specific station
         yield request
         
-        # Start charging (we got a charging point)
-        print(f"[T={env.now:.1f}] Car {car_id}: Started charging at node {node} (capacity: {total_capacity})")
+        # Start charging (we got a charging point at this station)
+        print(f"[T={env.now:.1f}] Car {car_id}: Started charging at station {station_id} (node {node})")
         
         # Calculate charging time based on actual current and target SoC
         charging_time = calculate_charging_time(current_soc, target_soc)
         
         if charging_time > 0:
-            print(f"[T={env.now:.1f}] Car {car_id}: Charging for {charging_time:.1f} time units (from {current_soc*100:.0f}% to {target_soc*100:.0f}%)")
+            print(f"[T={env.now:.1f}] Car {car_id}: Charging for {charging_time:.1f} time units at station {station_id} (from {current_soc*100:.0f}% to {target_soc*100:.0f}%)")
             yield env.timeout(charging_time)
             
             # Update driver's battery level
             driver.set_battery_level(target_soc)
-            print(f"[T={env.now:.1f}] Car {car_id}: Finished charging at node {node} (battery now: {target_soc*100:.0f}%)")
+            print(f"[T={env.now:.1f}] Car {car_id}: Finished charging at station {station_id} (battery now: {target_soc*100:.0f}%)")
         else:
-            print(f"[T={env.now:.1f}] Car {car_id}: No charging needed (already at target level)")
+            print(f"[T={env.now:.1f}] Car {car_id}: No charging needed at station {station_id} (already at target level)")
         
         stats['total_charging_events'] += 1
         
@@ -128,7 +174,7 @@ def charge_at_station(env, car_id, node, graph, stats, driver, target_soc=1.0):
 
 def setup_charging_resources(env, graph):
     """
-    Create SimPy resources for all nodes with charging stations
+    Create SimPy resources for each individual charging station
     
     Args:
         env: SimPy environment
@@ -140,15 +186,20 @@ def setup_charging_resources(env, graph):
     import simpy
     
     nodes_with_stations = 0
+    total_stations_created = 0
     
     for node in graph.nodes:
         stations = graph.nodes[node]['charging_stations']
         if stations:
-            # Calculate total capacity from existing stations
-            total_capacity = get_station_capacity(stations)
-            
-            # Create SimPy resource - SimPy automatically handles the queue
-            graph.nodes[node]['simpy_resource'] = simpy.Resource(env, capacity=total_capacity)
             nodes_with_stations += 1
+            
+            # Create individual SimPy resource for each charging station
+            for station in stations:
+                station_capacity = station.get_number_of_points()
+                # Create separate resource for each station
+                station.simpy_resource = simpy.Resource(env, capacity=station_capacity)
+                total_stations_created += 1
+            
     
+    print(f"Created individual SimPy resources for {total_stations_created} charging stations across {nodes_with_stations} nodes")
     return nodes_with_stations

@@ -4,7 +4,6 @@ from station_assignment import assign_charging_stations_to_nodes
 from evDriver import EVDriver
 from pathfinding import (
     find_nearest_charging_station, 
-    calculate_charging_needed, 
     travel_to_charging_station,
     travel_to_next_node
 )
@@ -69,30 +68,36 @@ class SimpleEVSimulation:
         print(f"[T={self.env.now:.1f}] Car {car_id}: Can travel {current_range_km:.2f}km with current battery")
         print(f"[T={self.env.now:.1f}] Car {car_id}: Need to travel {total_distance_km:.2f}km total")
         
-        # Check if we need charging before even starting
-        remaining_distance_km = driver.get_remaining_distance(self.graph)
-        needs_charging, current_range, deficit = calculate_charging_needed(
-            driver.get_state_of_charge(), battery_range_km, remaining_distance_km
-        )
-        
-        if needs_charging:
-            print(f"[T={self.env.now:.1f}] Car {car_id}: Need charging! Current range ({current_range:.2f}km) < total distance ({total_distance_km:.2f}km)")
-            yield from self._handle_charging_stop(car_id, driver, battery_range_km)
+        # Check if we can make the first move - if not, charge at starting node
+        if not driver.can_reach_next_node(self.graph, battery_range_km):
+            print(f"[T={self.env.now:.1f}] Car {car_id}: Cannot reach next node from start! Charging at starting node {source_node}")
+            yield from charge_at_station(self.env, car_id, source_node, self.graph, self.stats, driver, target_soc=1.0)
         
         # Main journey loop - high level orchestration
-        while not driver.has_reached_destination():
+        loop_counter = 0
+        max_loops = len(path) * 2  # Safety limit to prevent infinite loops
+        
+        while not driver.has_reached_destination() and loop_counter < max_loops:
+            loop_counter += 1
             current_node = driver.get_current_node()
             
-            # Check if charging needed before next move
-            remaining_distance_km = driver.get_remaining_distance(self.graph)
-            needs_charging, current_range, deficit = calculate_charging_needed(
-                driver.get_state_of_charge(), battery_range_km, remaining_distance_km
-            )
+            # Check if we can make the next move
+            if not driver.can_reach_next_node(self.graph, battery_range_km):
+                print(f"[T={self.env.now:.1f}] Car {car_id}: Cannot reach next node! Charging at current node {current_node}")
+                yield from charge_at_station(self.env, car_id, current_node, self.graph, self.stats, driver, target_soc=1.0)
+                continue  # Restart loop after charging
+            
+            # NEW: Check if driver is anxious about charging (50% SoC threshold)
+            needs_charging, current_range, deficit, reason = driver.needs_charging_for_journey(self.graph, battery_range_km)
             
             if needs_charging:
-                print(f"[T={self.env.now:.1f}] Car {car_id}: Need charging! Range({current_range:.2f}km) < Distance({remaining_distance_km:.2f}km)")
+                print(f"[T={self.env.now:.1f}] Car {car_id}: {reason}")
                 yield from self._handle_charging_stop(car_id, driver, battery_range_km)
                 continue  # Restart loop after charging
+            else:
+                # Log the reason for not charging (anxiety status)
+                if "Anxious" in reason:
+                    print(f"[T={self.env.now:.1f}] Car {car_id}: {reason} - continuing journey")
             
             # Travel to next node
             yield from travel_to_next_node(self.env, car_id, driver, self.graph, travel_time_per_km=0.01, battery_range_km=battery_range_km)
@@ -101,6 +106,10 @@ class SimpleEVSimulation:
             if driver.is_battery_empty():
                 print(f"[T={self.env.now:.1f}] Car {car_id}: STRANDED! Battery empty at node {driver.get_current_node()}")
                 return
+        
+        if loop_counter >= max_loops:
+            print(f"[T={self.env.now:.1f}] Car {car_id}: Stopped due to loop limit - possible infinite loop prevented")
+            return
         
         # Journey completed
         print(f"[T={self.env.now:.1f}] Car {car_id}: Reached destination {destination_node}!")
@@ -151,7 +160,8 @@ class SimpleEVSimulation:
     def spawn_multiple_cars(self, num_cars):
         """Spawn multiple cars for testing"""
         all_nodes = list(self.graph.nodes)
-
+        battery_range_km = 300  # Maximum km car can travel with full battery
+        
         for car_id in range(1, num_cars + 1):
             # Pick random source and destination
             while True:
@@ -162,13 +172,28 @@ class SimpleEVSimulation:
                     test_driver = EVDriver(source, destination, 1.0, 20)
                     path = test_driver.find_shortest_path(self.graph)
                     if path:
-                        # Check distance instead of hop count
-                        distance_km = test_driver._calculate_path_distance(self.graph, path)
-                        if 50 <= distance_km <= 200:  # 50-200km trips
+                        # Check actual distance instead of just path length
+                        total_distance_km = test_driver._calculate_path_distance(self.graph, path)
+                        # Accept routes between 100km and 550km (reasonable range)
+                        if 100 <= total_distance_km <= 550:
                             break
+            """""
+           # Calculate minimum SoC needed to reach the next node
+            if len(path) >= 2 and self.graph.has_edge(path[0], path[1]):
+                first_edge_distance = self.graph.edges[path[0], path[1]]['weight']
+                # Add 20% safety margin
+                min_soc_needed = (first_edge_distance * 1.2) / battery_range_km
+                # Ensure minimum of 15% battery
+                min_soc_needed = max(0.15, min_soc_needed)
+            else:
+                min_soc_needed = 0.15  # Default 15% minimum
     
-            # These lines should be INSIDE the for loop
-            initial_soc = random.uniform(0.1, 0.3)
+            # Generate initial SoC that's at least enough for first move
+            # More realistic range: some cars start with high SoC, others lower
+            initial_soc = min_soc_needed + random.uniform(0.2, 0.6)  # Add 20-60% extra
+            initial_soc = min(1.0, initial_soc)  # Cap at 100%"" 
+            """
+            initial_soc = 0.8
             connector_type = random.choice([10, 20, 30])
         
             print(f"Spawning car {car_id} from {source} to {destination} with SoC {initial_soc:.2f}")
@@ -182,7 +207,7 @@ class SimpleEVSimulation:
         print(f"Graph has {len(self.graph.nodes)} nodes")
         
         # Spawn cars
-        self.spawn_multiple_cars(num_cars=5)  # Reduced for testing
+        self.spawn_multiple_cars(num_cars=100)  # Reduced for testing
         
         # Run simulation
         if self.simulation_time:
@@ -193,6 +218,7 @@ class SimpleEVSimulation:
             self.env.run()  # Run until all processes finish
         
         # Print final statistics
+        print("FINAL STATISTICS") 
         print("\n=== Simulation Complete ===")
         print(f"Cars spawned: {self.stats['cars_spawned']}")
         print(f"Cars completed journey: {self.stats['cars_completed']}")
