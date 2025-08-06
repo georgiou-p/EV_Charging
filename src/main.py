@@ -8,7 +8,7 @@ def main():
     
     print("Starting EV Charging Station Assignment Process...")
     
-    # Configuration - paths relative to project root
+    # Configuration
     geojson_path = "data/UK_Mainland_GB_simplified.geojson"
     stations_json_path = "data/cleanedM_charging_stations.json"
     

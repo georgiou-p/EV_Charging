@@ -118,25 +118,8 @@ def find_nearest_charging_station(graph, current_node, planned_route, max_range)
     
     return best_station
 
-def calculate_charging_needed(current_soc, battery_range, remaining_distance):
-    """
-    Calculate if charging is needed to complete the journey
-    
-    Args:
-        current_soc: Current state of charge (0.0 to 1.0)
-        battery_range: Maximum distance possible with full battery (in km)
-        remaining_distance: Remaining distance to destination (in km)
-        
-    Returns:
-        tuple: (needs_charging: bool, current_range: float, deficit: float)
-    """
-    current_range = battery_range * current_soc
-    deficit = remaining_distance - current_range
-    needs_charging = deficit > 0
-    
-    return needs_charging, current_range, max(0, deficit)
 
-def travel_to_charging_station(env, car_id, current_node, charging_node, graph, travel_time_per_unit=1.0):
+def travel_to_charging_station(env, car_id, current_node, charging_node, graph, driver, travel_time_per_unit=1.0):
     """
     Handle travel from current location to a charging station using weighted distances
     
@@ -174,13 +157,18 @@ def travel_to_charging_station(env, car_id, current_node, charging_node, graph, 
     if total_distance > 0:
         total_travel_time = total_distance * travel_time_per_unit
         yield env.timeout(total_travel_time)
-        print(f"[T={env.now:.1f}] Car {car_id}: Arrived at charging station {charging_node} (traveled distance: {total_distance:.2f}km)")
+
+        consumption_per_km = 1.0 / driver.get_battery_capacity()
+        battery_consumption = total_distance * consumption_per_km
+        driver.consume_battery(battery_consumption)
+
+        print(f"[T={env.now:.1f}] Car {car_id}: Arrived at node {charging_node} (traveled distance: {total_distance:.2f}km. SoC: {driver.get_state_of_charge():.2f})")
     else:
-        print(f"[T={env.now:.1f}] Car {car_id}: Already at charging station {charging_node}")
+        print(f"[T={env.now:.1f}] Car {car_id}: Already at node {charging_node}")
     
     return True
 
-def travel_to_next_node(env, car_id, driver, graph, travel_time_per_km=0.01, battery_range_km=300):
+def travel_to_next_node(env, car_id, driver, graph, travel_time_per_km=0.01):
     """
     Handle travel to the next node in the path using weighted distances
     
@@ -211,7 +199,7 @@ def travel_to_next_node(env, car_id, driver, graph, travel_time_per_km=0.01, bat
     yield env.timeout(travel_time)
     
     # Update battery based on actual distance traveled
-    consumption_per_km = 1.0 / battery_range_km
+    consumption_per_km = 1.0 / driver.get_battery_capacity()
     battery_consumption = distance_km * consumption_per_km
     driver.consume_battery(battery_consumption)
     

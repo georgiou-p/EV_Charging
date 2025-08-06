@@ -1,7 +1,7 @@
 import networkx as nx
 
 class EVDriver:
-    def __init__(self, source_node, destination_node, state_of_charge, connector_type):
+    def __init__(self, source_node, destination_node, state_of_charge, connector_type, battery_capacity_km):
         """
         Initialize an EV Driver
         
@@ -17,6 +17,7 @@ class EVDriver:
         self.connector_type = connector_type
         self.current_path = []
         self.current_position_index = 0
+        self.battery_capacity_km = battery_capacity_km
         self.charging_anxiety_threshold = 0.5  # 50% SoC anxiety threshold
     
     # Getters
@@ -41,6 +42,9 @@ class EVDriver:
     def get_charging_anxiety_threshold(self):
         return self.charging_anxiety_threshold
     
+    def get_battery_capacity(self):
+        return self.battery_capacity_km
+    
     # Setters
     def set_source_node(self, source_node):
         self.source_node = source_node
@@ -60,6 +64,9 @@ class EVDriver:
     
     def set_current_position_index(self, index):
         self.current_position_index = index
+
+    def set_battery_capacity_km(self, battery_capacity_km):
+        self.battery_capacity_km = battery_capacity_km
     
     def set_charging_anxiety_threshold(self, threshold):
         """Set the SoC threshold at which driver becomes anxious about charging"""
@@ -129,7 +136,7 @@ class EVDriver:
         except (nx.NetworkXNoPath, nx.NodeNotFound):
             return float('inf')
     
-    def can_reach_next_node(self, graph, battery_range_km):
+    def can_reach_next_node(self, graph):
         """
         Check if the car can reach the next node in its path
         
@@ -158,7 +165,7 @@ class EVDriver:
         # Check if edge exists and get distance
         if graph.has_edge(current_node, next_node):
             edge_distance_km = graph.edges[current_node, next_node]['weight']
-            current_range_km = self.get_range_remaining(battery_range_km)
+            current_range_km = self.get_range_remaining()
             
             # Add small safety margin
             required_range_km = edge_distance_km * 1.1  # 10% safety margin
@@ -176,7 +183,7 @@ class EVDriver:
         """
         return self.state_of_charge <= self.charging_anxiety_threshold
     
-    def should_look_for_charging(self, graph, battery_range_km):
+    def should_look_for_charging(self, graph):
         """
         Determine if driver should start looking for charging based on anxiety threshold
         and remaining journey requirements
@@ -195,13 +202,13 @@ class EVDriver:
             return True, f"Critical battery level: {current_soc*100:.0f}%"
         
         # Can't reach next node - must charge immediately
-        if not self.can_reach_next_node(graph, battery_range_km):
+        if not self.can_reach_next_node(graph):
             return True, "Cannot reach next node"
         
         # Driver anxiety kicks in at 50% SoC
         if self.is_anxious_about_charging():
             remaining_distance_km = self.get_remaining_distance(graph)
-            current_range_km = self.get_range_remaining(battery_range_km)
+            current_range_km = self.get_range_remaining()
             
             # If anxious AND can't complete journey, look for charging
             if remaining_distance_km > current_range_km:
@@ -213,7 +220,7 @@ class EVDriver:
         # Above anxiety threshold - continue driving
         return False, f"Comfortable at {current_soc*100:.0f}% SoC (above {self.charging_anxiety_threshold*100:.0f}% anxiety threshold)"
     
-    def needs_charging_for_journey(self, graph, battery_range_km):
+    def needs_charging_for_journey(self, graph):
         """
         Check if charging is needed to complete the remaining journey
         
@@ -224,12 +231,11 @@ class EVDriver:
         Returns:
             tuple: (needs_charging: bool, current_range: float, deficit: float, reason: str)
         """
-        current_soc = self.get_state_of_charge()
-        current_range_km = self.get_range_remaining(battery_range_km)
+        current_range_km = self.get_range_remaining()
         remaining_distance_km = self.get_remaining_distance(graph)
         
         # Check if driver should look for charging based on anxiety + journey requirements
-        should_charge, reason = self.should_look_for_charging(graph, battery_range_km)
+        should_charge, reason = self.should_look_for_charging(graph)
         
         deficit = max(0, remaining_distance_km - current_range_km)
         
@@ -241,9 +247,9 @@ class EVDriver:
         self.state_of_charge -= consumption
         self.state_of_charge = max(0.0, self.state_of_charge)
 
-    def get_range_remaining(self, max_range_km):
+    def get_range_remaining(self):
         """Get remaining travel range in kilometers"""
-        return max_range_km * self.state_of_charge
+        return self.battery_capacity_km * self.state_of_charge
 
     @property
     def battery_percentage(self):
@@ -266,6 +272,7 @@ class EVDriver:
     def __str__(self):
         return (f"EVDriver(Source: {self.source_node}, "
                 f"Destination: {self.destination_node}, "
+                f"Capacity: {self.battery_capacity_km}km, "
                 f"SoC: {self.state_of_charge:.2f}, "
                 f"Connector: {self.connector_type}, "
                 f"Current: {self.get_current_node()})")
