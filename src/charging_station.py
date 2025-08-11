@@ -3,16 +3,16 @@ from typing import List, Dict, Any
 from collections import deque
 
 class Connection:
-    def __init__(self, power_kw: float, current_type_id: int = None, 
+    def __init__(self, power_kw: float, connection_type_id: int = None, 
                  amps: float = None, voltage: float = None, quantity: int = 1):
         self.power_kw = power_kw
-        self.current_type_id = current_type_id
+        self.connection_type_id = connection_type_id
         self.amps = amps
         self.voltage = voltage
         self.quantity = quantity
 
     def __str__(self):
-        return f"Connection(Power: {self.power_kw}kW, Type: {self.current_type_id}, Amps: {self.amps}, Voltage: {self.voltage}, Qty: {self.quantity})"
+        return f"Connection(Power: {self.power_kw}kW, Type: {self.connection_type_id}, Amps: {self.amps}, Voltage: {self.voltage}, Qty: {self.quantity})"
 
 class EVChargingStation:
     def __init__(self, station_id: str, latitude: float, longitude: float, 
@@ -83,7 +83,7 @@ class EVChargingStation:
         connections = [
             Connection(
                 power_kw=conn.get('PowerKW', 0),
-                current_type_id=conn.get('CurrentTypeID'),
+                connection_type_id=conn.get('ConnectionTypeID'),
                 amps=conn.get('Amps'),
                 voltage=conn.get('Voltage'),
                 quantity=conn.get('Quantity', 1)
