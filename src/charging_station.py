@@ -23,6 +23,7 @@ class EVChargingStation:
         self.number_of_points = number_of_points
         self.connections = connections
         self.charging_queue = deque()  # Queue for charging
+         #ADD COST
     
     # Getters
     def get_station_id(self):

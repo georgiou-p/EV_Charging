@@ -19,6 +19,7 @@ class EVDriver:
         self.current_position_index = 0
         self.battery_capacity_km = battery_capacity_km
         self.charging_anxiety_threshold = 0.5  # 50% SoC anxiety threshold
+        self.max_acceptable_wait_minutes = 20
     
     # Getters
     def get_source_node(self):
@@ -44,6 +45,9 @@ class EVDriver:
     
     def get_battery_capacity(self):
         return self.battery_capacity_km
+    
+    def get_max_acceptable_wait(self):
+        return self.max_acceptable_wait_minutes
     
     # Setters
     def set_source_node(self, source_node):
@@ -71,6 +75,9 @@ class EVDriver:
     def set_charging_anxiety_threshold(self, threshold):
         """Set the SoC threshold at which driver becomes anxious about charging"""
         self.charging_anxiety_threshold = max(0.0, min(1.0, threshold))
+
+    def set_max_acceptable_wait(self, minutes):
+        self.max_acceptable_wait_minutes = minutes
     
     # Path traversal methods
     def find_shortest_path(self, graph):

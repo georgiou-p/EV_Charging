@@ -23,65 +23,37 @@ def get_shortest_path(graph, source_node, destination_node):
         print(f"    No path found from {source_node} to {destination_node}")
         return None
 
-def get_station_queue_and_speed_metrics(stations, connector_type):
+def find_nearest_charging_station_simplified(graph, current_node, planned_route, max_range, connector_type, driver=None):
     """
-    Calculate queue and speed metrics for compatible stations at a node
+    Find the best charging station considering route optimization with correct position tracking
+    Returns specific station ID to go to directly
     
     Args:
-        stations: List of EVChargingStation objects
-        connector_type: Required connector type
-        
-    Returns:
-        tuple: (total_queue_length, max_compatible_power, compatible_points, avg_wait_time)
-    """
-    total_queue_length = 0
-    max_compatible_power = 0
-    compatible_points = 0
-    
-    for station in stations:
-        # Check if station has compatible connectors
-        station_has_compatible = False
-        station_max_power = 0
-        station_compatible_points = 0
-        
-        for connection in station.get_connections():
-            if connection.connection_type_id == connector_type or connection.connection_type_id == 0:
-                station_has_compatible = True
-                if connection.power_kw:
-                    station_max_power = max(station_max_power, connection.power_kw)
-                station_compatible_points += connection.quantity
-        
-        if station_has_compatible:
-            # Add queue length from this station
-            if hasattr(station, 'simpy_resource'):
-                total_queue_length += len(station.simpy_resource.queue)
-            
-            max_compatible_power = max(max_compatible_power, station_max_power)
-            compatible_points += station_compatible_points
-    
-    # Calculate average wait time estimate (cars in queue / charging points)
-    avg_wait_time = total_queue_length / max(compatible_points, 1)
-    
-    return total_queue_length, max_compatible_power, compatible_points, avg_wait_time
-
-def find_nearest_charging_station(graph, current_node, planned_route, max_range, connector_type):
-    """
-    Find the best charging station based on queue times and charging speed for compatible connectors
-    
-    Args:
-        graph: NetworkX graph with charging stations and weighted edges
+        graph: NetworkX graph with charging stations
         current_node: Current node position
-        planned_route: List of nodes representing the planned route
-        max_range: Maximum distance to search for stations
-        connector_type: Required connector type for the vehicle
+        planned_route: List of nodes in planned route
+        max_range: Maximum search distance in km
+        connector_type: Required connector type
+        driver: EVDriver object to get accurate position information
         
     Returns:
-        int or None: Node ID of best charging station, or None if none found
+        tuple: (best_node_id, best_station_id) or (None, None) if none found
     """
-    print(f"    Looking for charging stations (connector type {connector_type}) optimized for route, queue times and charging speed")
+    print(f"    Looking for best charging station within {max_range}km")
+    
+    # Get current position in the planned route for accurate route scoring
+    current_route_position = 0
+    if driver and planned_route:
+        current_route_position = driver.get_current_position_index()
+        print(f"    Car is at position {current_route_position} in route with {len(planned_route)} nodes")
+    elif current_node in planned_route:
+        current_route_position = planned_route.index(current_node)
+        print(f"    Car position determined by node lookup: position {current_route_position}")
+    else:
+        print(f"    Warning: Current node {current_node} not found in planned route")
     
     # Get all stations within range using weighted distances
-    compatible_stations_data = []
+    all_station_options = []
     
     try:
         distances = nx.single_source_dijkstra_path_length(graph, current_node, cutoff=max_range, weight='weight')
@@ -89,158 +61,190 @@ def find_nearest_charging_station(graph, current_node, planned_route, max_range,
         for node, distance in distances.items():
             if node != current_node and 'charging_stations' in graph.nodes[node]:
                 stations = graph.nodes[node]['charging_stations']
-                # Filter for compatibility
-                if stations and has_compatible_connector(stations, connector_type):
-                    # Get queue and speed metrics for this node
-                    queue_length, max_power, compatible_points, avg_wait = get_station_queue_and_speed_metrics(stations, connector_type)
-                    compatible_stations_data.append((node, distance, queue_length, max_power, compatible_points, avg_wait))
+                
+                # Score each individual station at this node
+                for station in stations:
+                    if has_compatible_connector([station], connector_type):
+                        score = score_individual_station(
+                            station, node, distance, planned_route, connector_type, current_route_position
+                        )
+                        all_station_options.append((node, station, score, distance))
         
     except nx.NodeNotFound:
+        print(f"    Error: Node {current_node} not found in graph")
         pass
     
-    if not compatible_stations_data:
+    if not all_station_options:
         print(f"    No compatible charging stations found within {max_range}km!")
-        return None
-    
-    print(f"    Found {len(compatible_stations_data)} compatible charging stations within range")
-    
-    # Score stations based on queue times and charging speed
-    scored_stations = []
-    
-    for node, distance, queue_length, max_power, compatible_points, avg_wait in compatible_stations_data:
-        
-        # Base score starts high
-        score = 1000
-        
-        # Major penalty for queue wait time (most important factor)
-        queue_penalty = avg_wait * 100  # Heavy penalty for waiting
-        score -= queue_penalty
-        
-        # Major bonus for charging speed (second most important)
-        if max_power >= 150:  # Ultra-rapid charging (150kW+)
-            speed_bonus = 200
-        elif max_power >= 50:  # Rapid charging (50-149kW)
-            speed_bonus = 100
-        elif max_power >= 22:  # Fast AC charging (22-49kW)
-            speed_bonus = 50
-        elif max_power >= 7:   # Standard charging (7-21kW)
-            speed_bonus = 20
-        else:  # Slow charging (<7kW)
-            speed_bonus = -50  # Penalty for very slow charging
-        
-        score += speed_bonus
-        
-        # Moderate bonus for having multiple compatible points (redundancy)
-        capacity_bonus = min(compatible_points * 10, 50)  # Cap at 50 points
-        score += capacity_bonus
-        
-        # Small distance penalty (least important factor now)
-        distance_penalty = distance * 0.5  # Much reduced compared to original
-        score -= distance_penalty
-        
-        # Route position factor (significant influence)
-        route_factor = 1.0  # Multiplier for final score
-        route_description = ""
-        
-        if node in planned_route:
-            route_position = planned_route.index(node)
-            current_position = planned_route.index(current_node) if current_node in planned_route else 0
-            
-            if route_position > current_position:
-                # Station is ahead on our planned route - significant bonus
-                route_factor = 1.5  # 50% bonus for on-route stations
-                route_description = "ON_ROUTE"
-            else:
-                # Station is behind us on route - moderate bonus  
-                route_factor = 1.2  # 20% bonus for stations we've passed
-                route_description = "ROUTE_BEHIND"
-        else:
-            # Station requires detour - calculate detour penalty
-            # Find closest point on route to return to after charging
-            min_return_distance = float('inf')
-            for route_node in planned_route:
-                try:
-                    return_distance = nx.shortest_path_length(graph, node, route_node, weight='weight')
-                    min_return_distance = min(min_return_distance, return_distance)
-                except:
-                    continue
-            
-            if min_return_distance != float('inf'):
-                total_detour = distance + min_return_distance
-                # Penalty based on detour severity
-                if total_detour <= distance * 1.5:  # Less than 50% extra distance
-                    route_factor = 0.9  # Small penalty for minor detours
-                    route_description = "MINOR_DETOUR"
-                elif total_detour <= distance * 2.0:  # Less than double distance
-                    route_factor = 0.7  # Moderate penalty for medium detours
-                    route_description = "MEDIUM_DETOUR"
-                else:
-                    route_factor = 0.5  # Heavy penalty for major detours
-                    route_description = "MAJOR_DETOUR"
-            else:
-                route_factor = 0.3  # Severe penalty if can't return to route
-                route_description = "NO_RETURN"
-        
-        # Apply route factor to final score
-        score = score * route_factor
-        
-        final_score = max(score, 0)  # Ensure non-negative scores
-        
-        # Create comprehensive priority description
-        if queue_length == 0:
-            queue_status = "NO_QUEUE"
-        elif avg_wait <= 0.5:
-            queue_status = "SHORT_QUEUE"
-        elif avg_wait <= 1.0:
-            queue_status = "MEDIUM_QUEUE"
-        else:
-            queue_status = "LONG_QUEUE"
-        
-        if max_power >= 150:
-            speed_status = "ULTRA_RAPID"
-        elif max_power >= 50:
-            speed_status = "RAPID"
-        elif max_power >= 22:
-            speed_status = "FAST"
-        else:
-            speed_status = "SLOW"
-        
-        # Combine route position with charging characteristics
-        priority = f"{route_description}_{queue_status}_{speed_status}"
-        
-        scored_stations.append((node, distance, final_score, priority, queue_length, max_power, avg_wait, compatible_points, route_factor))
+        return None, None
     
     # Sort by score (highest first)
-    scored_stations.sort(key=lambda x: x[2], reverse=True)
+    all_station_options.sort(key=lambda x: x[2], reverse=True)
     
-    # Show top options
-    print("    Top charging station options (queue + speed + route optimized):")
-    for i, (station_node, distance, score, priority, queue_len, max_pwr, avg_wait, comp_pts, route_mult) in enumerate(scored_stations[:5]):
-        print(f"    {i+1}. Node {station_node}: score={score:.0f}, {priority}")
-        print(f"       Distance: {distance:.1f}km, Queue: {queue_len} cars, "
-              f"Wait: {avg_wait:.1f}x, Power: {max_pwr}kW, Points: {comp_pts}, Route: {route_mult:.1f}x")
+    print(f"    Found {len(all_station_options)} compatible charging stations within range")
     
-    # Get best node and select best station at that node
-    best_node_data = scored_stations[0]
-    best_node = best_node_data[0]
-    best_priority = best_node_data[3]
+    # Show top options with detailed route context
+    print("    Top charging station options (with route analysis):")
+    for i, (node, station, score, distance) in enumerate(all_station_options[:5]):
+        queue_len = len(station.simpy_resource.queue) if hasattr(station, 'simpy_resource') else 0
+        estimated_wait = queue_len * 10  # minutes
+        max_power = get_station_max_power(station, connector_type)
+        
+        # Determine route context for display
+        route_context = "OFF_ROUTE"
+        if node in planned_route:
+            node_position = planned_route.index(node)
+            if node_position > current_route_position:
+                route_context = f"ON_ROUTE_AHEAD (pos {node_position}/{len(planned_route)-1})"
+            elif node_position < current_route_position:
+                route_context = f"ON_ROUTE_BEHIND (pos {node_position}/{len(planned_route)-1})"
+            else:
+                route_context = f"CURRENT_LOCATION (pos {node_position})"
+        else:
+            route_context = f"DETOUR ({distance:.1f}km off route)"
+        
+        print(f"    {i+1}. Station {station.get_station_id()} at Node {node}: score={score:.0f}")
+        print(f"       {route_context} | Distance: {distance:.1f}km | Queue: {queue_len} cars ({estimated_wait}min) | Power: {max_power}kW")
     
-    print(f"    Selected best node: {best_node} ({best_priority})")
+    # Return best station
+    best_node, best_station, best_score, best_distance = all_station_options[0]
+    best_station_id = best_station.get_station_id()
     
-    # Get stations at the best node and select the best one
-    stations_at_best_node = graph.nodes[best_node]['charging_stations']
+    # Log the selection decision
+    route_context = "off-route detour"
+    if best_node in planned_route:
+        best_node_position = planned_route.index(best_node)
+        if best_node_position > current_route_position:
+            route_context = f"on-route ahead (pos {best_node_position})"
+        elif best_node_position < current_route_position:
+            route_context = f"on-route behind (pos {best_node_position})"
+        else:
+            route_context = f"current location (pos {best_node_position})"
     
-    # Find best station at the selected node using queue and speed optimization
-    from charging_utils import choose_charging_station_by_queue_and_speed
-    best_station = choose_charging_station_by_queue_and_speed(stations_at_best_node, connector_type)
+    print(f"     Selected: {best_station_id} at node {best_node} ({route_context}, score={best_score:.0f})")
+    return best_node, best_station_id
+
+
+def score_individual_station(station, node, distance, planned_route, connector_type, current_route_position=0):
+    """
+    Score an individual charging station with proper route-aware scoring
     
-    if best_station:
-        best_station_id = best_station.get_station_id()
-        print(f"    Selected best station at node: {best_station_id}")
-        return best_node, best_station_id
+    Args:
+        station: EVChargingStation object
+        node: Node ID where station is located
+        distance: Distance from current location in km
+        planned_route: List of nodes in planned route
+        connector_type: Required connector type
+        current_route_position: Current position index in planned route
+        
+    Returns:
+        float: Station score (higher is better)
+    """
+    score = 1000  # Base score
+    
+    # 1. Queue penalty (most important) - predictive based on current state
+    queue_length = len(station.simpy_resource.queue) if hasattr(station, 'simpy_resource') else 0
+    estimated_wait_time = queue_length * 10  # Estimate 10 minutes per car in queue
+    queue_penalty = estimated_wait_time * 10  # Heavy penalty for predicted wait time
+    score -= queue_penalty
+    
+    # 2. Charging speed bonus (second most important)
+    max_power = get_station_max_power(station, connector_type)
+    if max_power >= 150:  # Ultra-rapid charging (150kW+)
+        speed_bonus = 200
+    elif max_power >= 50:  # Rapid charging (50-149kW)
+        speed_bonus = 100
+    elif max_power >= 22:  # Fast AC charging (22-49kW)
+        speed_bonus = 50
+    elif max_power >= 7:   # Standard charging (7-21kW)
+        speed_bonus = 20
+    else:  # Slow charging (<7kW) or unknown
+        speed_bonus = -50  # Actually penalize very slow charging
+    
+    score += speed_bonus
+    
+    # 3. Route optimization (major factor) - FIXED WITH CORRECT POSITION LOGIC
+    route_factor = 1.0
+    route_description = "OFF_ROUTE"
+    
+    if planned_route and node in planned_route:
+        try:
+            route_position = planned_route.index(node)
+            
+            if route_position > current_route_position:
+                # Station is AHEAD on our planned route - STRONG PREFERENCE
+                positions_ahead = route_position - current_route_position
+                # Give bigger bonus for stations further ahead (more strategic)
+                if positions_ahead >= 3:
+                    route_factor = 2.2  # Big bonus for strategic forward planning
+                else:
+                    route_factor = 2.0  # Good bonus for immediate forward progress
+                route_description = f"AHEAD_{positions_ahead}_NODES"
+                
+            elif route_position < current_route_position:
+                # Station is BEHIND us on route - DISCOURAGE BACKTRACKING
+                positions_behind = current_route_position - route_position
+                if positions_behind >= 3:
+                    route_factor = 0.4  # Heavy penalty for going way back
+                else:
+                    route_factor = 0.6  # Moderate penalty for minor backtracking
+                route_description = f"BEHIND_{positions_behind}_NODES"
+                
+            else:
+                # Station is at current position - moderate bonus
+                route_factor = 1.3
+                route_description = "CURRENT_POSITION"
+                
+        except ValueError:
+            # This shouldn't happen if node is in planned_route, but handle gracefully
+            route_factor = 1.0
+            route_description = "ROUTE_INDEX_ERROR"
     else:
-        print(f"    No compatible station found at best node {best_node}")
-        return None, None
+        # Station requires detour from planned route
+        if distance <= 15:  # Minor detour (under 15km)
+            route_factor = 0.9
+            route_description = f"MINOR_DETOUR_{distance:.1f}KM"
+        elif distance <= 35:  # Medium detour (15-35km)
+            route_factor = 0.7
+            route_description = f"MEDIUM_DETOUR_{distance:.1f}KM"
+        else:  # Major detour (over 35km)
+            route_factor = 0.5
+            route_description = f"MAJOR_DETOUR_{distance:.1f}KM"
+    
+    # 4. Distance penalty (minor factor - already considered in route scoring)
+    distance_penalty = distance * 0.3  # Reduced from 0.5 since route factor handles most distance logic
+    score -= distance_penalty
+    
+    # Apply route factor (this is where the major differentiation happens)
+    score *= route_factor
+    
+    # Debug logging for route scoring decisions (uncomment for detailed analysis)
+    # if node in planned_route:
+    #     route_pos = planned_route.index(node)
+    #     print(f"        Node {node}: pos {route_pos} vs current {current_route_position}, "
+    #           f"factor {route_factor:.1f} ({route_description})")
+    
+    return max(score, 0)  # Ensure non-negative scores
+
+
+def get_station_max_power(station, connector_type):
+    """
+    Get maximum power available at this station for the specified connector type
+    
+    Args:
+        station: EVChargingStation object
+        connector_type: Required connector type
+        
+    Returns:
+        float: Maximum power in kW for compatible connections
+    """
+    max_power = 0
+    for connection in station.get_connections():
+        # Check for direct match or universal compatibility (type 0)
+        if connection.connection_type_id == connector_type or connection.connection_type_id == 0:
+            if connection.power_kw and connection.power_kw > max_power:
+                max_power = connection.power_kw
+    return max_power
 
 
 def travel_to_charging_station(env, car_id, current_node, charging_node, graph, driver, travel_time_per_unit=1.0):
@@ -253,6 +257,7 @@ def travel_to_charging_station(env, car_id, current_node, charging_node, graph, 
         current_node: Starting node
         charging_node: Destination charging station node
         graph: NetworkX graph for pathfinding with weighted edges
+        driver: EVDriver object for battery management
         travel_time_per_unit: Time per distance unit in simulation units
         
     Yields:
@@ -261,40 +266,44 @@ def travel_to_charging_station(env, car_id, current_node, charging_node, graph, 
     Returns:
         bool: True if travel successful, False if no path found
     """
-    print(f"[T={env.now:.1f}] Car {car_id}: Detouring to charging station at node {charging_node}")
+    print(f"[T={env.now:.1f}] Car {car_id}: Traveling to charging station at node {charging_node}")
     
     # Get path to charging station using weights
     path_to_station = get_shortest_path(graph, current_node, charging_node)
     
     if not path_to_station:
-        print(f"[T={env.now:.1f}] Car {car_id}: No path to charging station {charging_node}!")
+        print(f"[T={env.now:.1f}] Car {car_id}: ERROR - No path to charging station {charging_node}!")
         return False
     
-    print(f"[T={env.now:.1f}] Car {car_id}: Taking detour path: {path_to_station}")
+    print(f"[T={env.now:.1f}] Car {car_id}: Route to charging station: {path_to_station[:5]}{'...' if len(path_to_station) > 5 else ''}")
     
     # Calculate total weighted distance for the path
     total_distance = 0
     for i in range(len(path_to_station) - 1):
         node1, node2 = path_to_station[i], path_to_station[i + 1]
-        total_distance += graph.edges[node1, node2]['weight']
+        if graph.has_edge(node1, node2):
+            total_distance += graph.edges[node1, node2]['weight']
     
     if total_distance > 0:
+        # Simulate travel time based on actual distance
         total_travel_time = total_distance * travel_time_per_unit
         yield env.timeout(total_travel_time)
 
+        # Update battery based on actual distance traveled
         consumption_per_km = 1.0 / driver.get_battery_capacity()
         battery_consumption = total_distance * consumption_per_km
         driver.consume_battery(battery_consumption)
 
-        print(f"[T={env.now:.1f}] Car {car_id}: Arrived at node {charging_node} (traveled distance: {total_distance:.2f}km. SoC: {driver.get_state_of_charge():.2f})")
+        print(f"[T={env.now:.1f}] Car {car_id}: Arrived at charging station (node {charging_node}) - traveled {total_distance:.2f}km, SoC: {driver.get_state_of_charge():.2f} ({driver.battery_percentage:.0f}%)")
     else:
-        print(f"[T={env.now:.1f}] Car {car_id}: Already at node {charging_node}")
+        print(f"[T={env.now:.1f}] Car {car_id}: Already at charging station location")
     
     return True
 
+
 def travel_to_next_node(env, car_id, driver, graph, travel_time_per_km=0.01):
     """
-    Handle travel to the next node in the path using weighted distances
+    Handle travel to the next node in the planned path using weighted distances
     
     Args:
         env: SimPy environment
@@ -302,7 +311,6 @@ def travel_to_next_node(env, car_id, driver, graph, travel_time_per_km=0.01):
         driver: EVDriver object
         graph: NetworkX graph with weighted edges
         travel_time_per_km: Time per kilometer in simulation units
-        battery_range_km: Maximum distance possible with full battery (in km)
         
     Yields:
         SimPy timeout events for travel time
@@ -311,12 +319,16 @@ def travel_to_next_node(env, car_id, driver, graph, travel_time_per_km=0.01):
     next_node = driver.move_to_next_node()
     
     if next_node is None:
+        print(f"[T={env.now:.1f}] Car {car_id}: No next node - reached end of path")
         return
     
     # Get the actual distance in km between these nodes
     distance_km = 0.0
     if graph.has_edge(current_node, next_node):
         distance_km = graph.edges[current_node, next_node]['weight']
+    else:
+        print(f"[T={env.now:.1f}] Car {car_id}: WARNING - No edge between {current_node} and {next_node}")
+        return
     
     # Simulate travel time based on actual distance
     travel_time = distance_km * travel_time_per_km
@@ -328,6 +340,7 @@ def travel_to_next_node(env, car_id, driver, graph, travel_time_per_km=0.01):
     driver.consume_battery(battery_consumption)
     
     print(f"[T={env.now:.1f}] Car {car_id}: Moved to node {next_node} (traveled {distance_km:.2f}km), SoC: {driver.get_state_of_charge():.2f} ({driver.battery_percentage:.0f}%)")
+
 
 def find_nearest_nodes_with_stations(graph, current_node, max_distance=50, connector_type=None): 
     """
@@ -360,6 +373,7 @@ def find_nearest_nodes_with_stations(graph, current_node, max_distance=50, conne
         nearby_stations.sort(key=lambda x: x[1])
         
     except nx.NodeNotFound:
+        print(f"Error: Node {current_node} not found in graph")
         pass
     
     return nearby_stations

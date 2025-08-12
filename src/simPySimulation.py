@@ -1,13 +1,14 @@
 import simpy
 import random
+import cProfile
 from station_assignment import assign_charging_stations_to_nodes
 from evDriver import EVDriver
 from pathfinding import (
-    find_nearest_charging_station, 
+    find_nearest_charging_station_simplified, 
     travel_to_charging_station,
     travel_to_next_node
 )
-from charging_utils import charge_at_station, setup_charging_resources
+from charging_utils import charge_at_station_with_queue_tolerance, setup_charging_resources
 
 class SimpleEVSimulation:
     def __init__(self, graph, simulation_time=None):
@@ -57,7 +58,7 @@ class SimpleEVSimulation:
         current_range_km = driver.get_range_remaining()
         print(f"[T={self.env.now:.1f}] Car {car_id}: Can travel {current_range_km:.2f}km out of {total_distance_km:.2f}km with current battery")
         
-        #--------------------MAIN JOURNEY LOOP--------------------
+        #--------------------MAIN JOURNEY LOOP----------
         loop_counter = 0
         max_loops = len(path) * 2  # Safety limit to prevent infinite loops
         
@@ -109,79 +110,146 @@ class SimpleEVSimulation:
         print(f"[T={self.env.now:.1f}] Car {car_id}: Reached destination {destination_node}!")
         self.stats['cars_completed'] += 1
     
+    
+    def _handle_charging_stop(self, car_id, driver, max_wait_minutes=20):
+        """
+        Simplified charging process with proper path restoration:
+        1. Find best station and go there
+        2. If queue > max_wait_minutes, find alternative at same node  
+        3. If no alternatives at node, find other stations within reach
+        4. After charging, recalculate path from charging location to destination
+        """
+        current_node = driver.get_current_node()
+        current_range_km = driver.get_range_remaining()
+        planned_route = driver.get_current_path()
+        connector_type = driver.get_connector_type()
+        destination_node = driver.get_destination_node()
+
+        print(f"[T={self.env.now:.1f}] Car {car_id}: Need charging, looking for best station within {current_range_km:.1f}km range")
+
+        # Step 1: Find best station within reach
+        result = find_nearest_charging_station_simplified(
+            self.graph, current_node, planned_route, current_range_km, connector_type
+        )
+
+        if result == (None, None):
+            print(f"[T={self.env.now:.1f}] Car {car_id}: No charging stations within range!")
+            return False
+
+        target_node, target_station_id = result
+        print(f"[T={self.env.now:.1f}] Car {car_id}: Selected charging station {target_station_id} at node {target_node}")
+
+        # Step 2: Travel to target node if needed
+        if target_node != current_node:
+            print(f"[T={self.env.now:.1f}] Car {car_id}: Traveling to charging station at node {target_node}")
+            travel_success = yield from travel_to_charging_station(
+                self.env, car_id, current_node, target_node, self.graph, driver
+            )
+            if not travel_success:
+                print(f"[T={self.env.now:.1f}] Car {car_id}: Failed to reach charging station!")
+                return False
+        else:
+            print(f"[T={self.env.now:.1f}] Car {car_id}: Charging station is at current location")
+
+        # Step 3: Try to charge with queue tolerance
+        charging_success = yield from charge_at_station_with_queue_tolerance(
+            self.env, car_id, target_node, target_station_id, self.graph, self.stats, driver, max_wait_minutes
+        )
+
+        # Step 4: Handle charging failure
+        if not charging_success:
+            print(f"[T={self.env.now:.1f}] Car {car_id}: Charging failed at node {target_node}")
+            print(f"[T={self.env.now:.1f}] Car {car_id}: No acceptable charging options found")
+            # Note: Enhanced fallback could search for other locations here
+            return False
+
+        # Step 5: CRUCIAL - Recalculate path from charging location to destination
+        print(f"[T={self.env.now:.1f}] Car {car_id}: Charging complete, recalculating route from {target_node} to {destination_node}")
+
+        # Update the driver's source to current charging location
+        driver.set_source_node(target_node)
+
+        # Calculate new path from charging station to destination
+        new_path = driver.find_shortest_path(self.graph)
+
+        if not new_path:
+            print(f"[T={self.env.now:.1f}] Car {car_id}: CRITICAL ERROR - No path from charging station {target_node} to destination {destination_node}!")
+            return False
+
+        # Calculate new route distance
+        new_distance_km = driver._calculate_path_distance(self.graph, new_path)
+        print(f"[T={self.env.now:.1f}] Car {car_id}: New route calculated: {len(new_path)} nodes, {new_distance_km:.2f}km remaining")
+        print(f"[T={self.env.now:.1f}] Car {car_id}: Resuming journey from {target_node} to {destination_node}")
+
+        # Log the new path for debugging
+        if len(new_path) <= 10:
+            print(f"[T={self.env.now:.1f}] Car {car_id}: New path: {new_path}")
+        else:
+            print(f"[T={self.env.now:.1f}] Car {car_id}: New path: {new_path[:10]}... (total {len(new_path)} nodes)")
+
+        return True
+        
     def _charge_at_current_location(self, car_id, driver, current_node):
         """
-        Try to charge at the current location with connector compatibility check
-        
-        Returns:
-            bool: True if charging successful, False if no compatible station
+        Try to charge at the current location using the simplified approach
         """
         stations = self.graph.nodes[current_node]['charging_stations']
         if not stations:
+            print(f"[T={self.env.now:.1f}] Car {car_id}: No charging stations at current node {current_node}")
             return False
-        
+    
         connector_type = driver.get_connector_type()
         from charging_utils import has_compatible_connector
-        
+        from pathfinding import get_station_max_power
+
         if not has_compatible_connector(stations, connector_type):
             print(f"[T={self.env.now:.1f}] Car {car_id}: No compatible charging stations at node {current_node} for connector {connector_type}")
             self.stats['connector_incompatibility_failures'] += 1
             return False
-        
-        # For current location charging, select best available station (no pre-selection)
-        yield from charge_at_station(self.env, car_id, current_node, self.graph, self.stats, driver, target_soc=1.0)
-        return True
-    
-    def _handle_charging_stop(self, car_id, driver):
-        """
-        Handle the complete charging process including travel to station with connector compatibility
-        
-        Args:
-            car_id: Car identifier
-            driver: EVDriver object
-            
-        Returns:
-            bool: True if charging successful, False if no compatible stations found
-        """
-        current_node = driver.get_current_node()
-        current_range_km = driver.get_range_remaining()
-        planned_route = driver.get_current_path()  
-        connector_type = driver.get_connector_type()
-        
-        # Find best charging station - now returns (node, station_id) tuple
-        result = find_nearest_charging_station(
-            self.graph, current_node, planned_route, current_range_km, connector_type
+
+        # Find the best station at current location
+        best_station = None
+        best_score = -1
+
+        for station in stations:
+            if has_compatible_connector([station], connector_type):
+                # Score this station
+                score = 1000
+
+                # Queue penalty
+                queue_length = len(station.simpy_resource.queue) if hasattr(station, 'simpy_resource') else 0
+                estimated_wait_time = queue_length * 10
+                score -= estimated_wait_time * 10
+
+                # Power bonus
+                max_power = get_station_max_power(station, connector_type)
+                if max_power >= 150:
+                    score += 200
+                elif max_power >= 50:
+                    score += 100
+                elif max_power >= 22:
+                    score += 50
+                else:
+                    score += 20
+
+                if score > best_score:
+                    best_score = score
+                    best_station = station
+
+        if not best_station:
+            return False
+
+        best_station_id = best_station.get_station_id()
+        print(f"[T={self.env.now:.1f}] Car {car_id}: Selected best station at current location: {best_station_id}")
+
+        # Use the queue tolerance charging function
+        charging_success = yield from charge_at_station_with_queue_tolerance(
+            self.env, car_id, current_node, best_station_id, self.graph, self.stats, driver, max_wait_minutes=20
         )
-        
-        if result is None:
-            print(f"[T={self.env.now:.1f}] Car {car_id}: No compatible charging station within range!")
-            self.stats['connector_incompatibility_failures'] += 1
-            return False
-        
-        # Unpack the result
-        charging_node, station_id = result
-        
-        # Travel to charging station if not already there
-        if charging_node != current_node:
-            travel_success = yield from travel_to_charging_station(self.env, car_id, current_node, charging_node, self.graph, driver)
-            if not travel_success:
-                return False
-        
-        # Charge at the station with the specific station ID
-        yield from charge_at_station(self.env, car_id, charging_node, self.graph, self.stats, driver, 
-                                   target_soc=1.0, specific_station_id=station_id)
-        
-        # Recalculate path from charging station to destination
-        print(f"[T={self.env.now:.1f}] Car {car_id}: Recalculating route from charging station {charging_node} to destination {driver.get_destination_node()}")
-        driver.set_source_node(charging_node)
-        new_path = driver.find_shortest_path(self.graph)
-        if not new_path:
-            print(f"[T={self.env.now:.1f}] Car {car_id}: No path from charging station!")
-            return False
-        
-        new_distance_km = driver._calculate_path_distance(self.graph, new_path)
-        print(f"[T={self.env.now:.1f}] Car {car_id}: New route from charging station: {len(new_path)} stops, {new_distance_km:.2f}km remaining")
-        return True
+
+        return charging_success
+    
+    
     
     def spawn_multiple_cars(self, num_cars):
         """Spawn multiple cars for testing with different connector types"""
@@ -190,7 +258,7 @@ class SimpleEVSimulation:
         
         # Define connector type distribution (based on real UK EV market)
         connector_types = [1, 2, 3]  # Type 1, Type 2/3pin, CCS/CHAdeMO
-        connector_weights = [0.2, 0.6, 0.1]  # Type 2 most common in UK
+        connector_weights = [0.2, 0.7, 0.1]  # Type 2 most common in UK
         
         for car_id in range(1, num_cars + 1):
             # Pick random source and destination
@@ -224,7 +292,7 @@ class SimpleEVSimulation:
         print(f"Graph has {len(self.graph.nodes)} nodes")
         
         # Spawn cars
-        self.spawn_multiple_cars(num_cars=100)  # NUMBER OF CARS
+        self.spawn_multiple_cars(num_cars=10000)  # NUMBER OF CARS
         
         # Run simulation
         if self.simulation_time:
@@ -254,6 +322,8 @@ class SimpleEVSimulation:
         
         if self.stats['cars_completed'] == 0 and self.stats['cars_spawned'] > 0:
             print("No cars completed their journey - they may be stranded or need more time!")
+
+
 
 def main():
     print("Loading graph and charging stations...")
