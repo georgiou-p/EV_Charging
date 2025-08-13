@@ -1,6 +1,6 @@
 import networkx as nx
 from typing import List, Optional, Tuple
-from charging_utils import has_compatible_connector
+from charging_utils import has_compatible_connector, calculate_queue_wait_time
 
 def get_shortest_path(graph, source_node, destination_node):
     """
@@ -87,7 +87,7 @@ def find_nearest_charging_station(graph, current_node, planned_route, max_range,
     print("    Top charging station options (with route analysis):")
     for i, (node, station, score, distance) in enumerate(all_station_options[:5]):
         queue_len = len(station.simpy_resource.queue) if hasattr(station, 'simpy_resource') else 0
-        estimated_wait = queue_len * 10  # minutes
+        estimated_wait = calculate_queue_wait_time(station, connector_type)
         max_power = get_station_max_power(station, connector_type)
         
         # Determine route context for display
@@ -121,6 +121,7 @@ def find_nearest_charging_station(graph, current_node, planned_route, max_range,
         else:
             route_context = f"current location (pos {best_node_position})"
         return best_node, best_station_id
+    return best_node,best_station_id
 
 
 def score_individual_station(station, node, distance, planned_route, connector_type, current_route_position=0):
@@ -142,7 +143,7 @@ def score_individual_station(station, node, distance, planned_route, connector_t
     
     # 1. Queue penalty - predictive based on current state
     queue_length = len(station.simpy_resource.queue) if hasattr(station, 'simpy_resource') else 0
-    estimated_wait_time = queue_length * 10  # Estimate 10 minutes per car in queue !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!CHANGE THAT
+    estimated_wait_time = calculate_queue_wait_time(station, connector_type)  # Estimate 10 minutes per car in queue !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!CHANGE THAT
     queue_penalty = estimated_wait_time * 10  # Heavy penalty for predicted wait time
     score -= queue_penalty
     
@@ -235,7 +236,7 @@ def get_station_max_power(station, connector_type):
     return max_power
 
 
-def travel_to_charging_station(env, car_id, current_node, charging_node, graph, driver, travel_time_per_unit=1.0):
+def travel_to_charging_station(env, car_id, current_node, charging_node, graph, driver, travel_time_per_unit=0.75):
     """
     Handle travel from current location to a charging station using weighted distances
     
@@ -289,7 +290,7 @@ def travel_to_charging_station(env, car_id, current_node, charging_node, graph, 
     return True
 
 
-def travel_to_next_node(env, car_id, driver, graph, travel_time_per_km=0.01):
+def travel_to_next_node(env, car_id, driver, graph, travel_time_per_km=0.75):
     """
     Handle travel to the next node in the planned path using weighted distances
     

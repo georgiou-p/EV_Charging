@@ -92,7 +92,7 @@ class SimpleEVSimulation:
                     print(f"[T={self.env.now:.1f}] Car {car_id}: {reason} - continuing journey")
             
             # Travel to next node
-            yield from travel_to_next_node(self.env, car_id, driver, self.graph, travel_time_per_km=0.01)
+            yield from travel_to_next_node(self.env, car_id, driver, self.graph, travel_time_per_km=0.75)
             
             # Check if we've somehow run out of battery 
             if driver.is_battery_empty():

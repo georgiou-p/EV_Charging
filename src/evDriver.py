@@ -20,6 +20,8 @@ class EVDriver:
         self.battery_capacity_km = battery_capacity_km
         self.charging_anxiety_threshold = 0.5  # 50% SoC anxiety threshold
         self.max_acceptable_wait_minutes = 20
+        self.energy_consumption_kwh_per_km = 0.25 #Typical average
+        self.battery_capacity_kwh = battery_capacity_km * self.energy_consumption_kwh_per_km
     
     # Getters
     def get_source_node(self):
@@ -48,6 +50,9 @@ class EVDriver:
     
     def get_max_acceptable_wait(self):
         return self.max_acceptable_wait_minutes
+    
+    def get_battery_capacity_kwh(self):
+        return self.battery_capacity_kwh
     
     # Setters
     def set_source_node(self, source_node):
@@ -78,6 +83,17 @@ class EVDriver:
 
     def set_max_acceptable_wait(self, minutes):
         self.max_acceptable_wait_minutes = minutes
+
+    def set_battery_capacity_kwh(self, capacity_kwh):
+        """Set battery capacity in kWh and update km range accordingly"""
+        self.battery_capacity_kwh = capacity_kwh
+        self.battery_capacity_km = capacity_kwh / self.energy_consumption_kwh_per_km
+
+    def set_energy_consumption(self, kwh_per_km):
+        """Update energy consumption and recalculate capacities"""
+        self.energy_consumption_kwh_per_km = kwh_per_km
+        # Keep kWh as primary, recalculate km
+        self.battery_capacity_km = self.battery_capacity_kwh / kwh_per_km
     
     # Path traversal methods
     def find_shortest_path(self, graph):

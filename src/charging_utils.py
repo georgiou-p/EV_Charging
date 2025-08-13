@@ -52,26 +52,33 @@ def get_station_capacity(charging_stations):
     """
     return sum(station.get_number_of_points() for station in charging_stations)
 
-def calculate_charging_time(current_soc, target_soc=1.0, base_charging_time=10.0):
+def calculate_charging_time(current_soc, target_soc, battery_capacity_kwh, charger_power_kw):
     """
-    Calculate time needed to charge from current to target state of charge
+    Calculate realistic charging time using the provided formula
+    Time (h) = Battery × (Target SoC - Initial SoC) / (Charger Power × 0.94)
     
     Args:
         current_soc: Current state of charge (0.0 to 1.0)
         target_soc: Target state of charge (0.0 to 1.0)
-        base_charging_time: Time for full charge (0% to 100%)
+        battery_capacity_kwh: Battery capacity in kWh
+        charger_power_kw: Charger power in kW
         
     Returns:
-        float: Charging time needed
+        float: Charging time in hours
     """
-    if target_soc <= current_soc:
+    if target_soc <= current_soc or charger_power_kw <= 0:
         return 0.0
     
-    charge_needed = target_soc - current_soc
-    return base_charging_time * charge_needed
+    # Apply the realistic formula
+    soc_difference = target_soc - current_soc
+    charging_efficiency = 0.94
+    
+    time_hours = (battery_capacity_kwh * soc_difference) / (charger_power_kw * charging_efficiency)
+    
+    return time_hours
 
 def charge_at_station_with_queue_tolerance(env, car_id, target_node, target_station_id, graph, stats, driver, 
-                                         max_wait_minutes=20, target_soc=1.0):
+                                         max_wait_minutes=20, target_soc=0.8):
     """
     Try to charge at specific station (chosen based on predictions). 
     Re-evaluate with REAL conditions upon arrival.
@@ -121,7 +128,7 @@ def charge_at_station_with_queue_tolerance(env, car_id, target_node, target_stat
     
     # RE-EVALUATE: Check the REAL queue conditions at target when driver arrives
     current_queue = len(target_station.simpy_resource.queue) if hasattr(target_station, 'simpy_resource') else 0
-    estimated_wait_minutes = current_queue * 10  # Assume 10 minutes per car ahead
+    estimated_wait_minutes = calculate_queue_wait_time(target_station, connector_type)
     
     print(f"[T={env.now:.1f}] Car {car_id}: REAL conditions at target station {target_station_id}: {current_queue} cars in queue (est. {estimated_wait_minutes} min wait)")
     
@@ -139,7 +146,7 @@ def charge_at_station_with_queue_tolerance(env, car_id, target_node, target_stat
                 has_compatible_connector([station], connector_type)):
                 
                 real_queue_len = len(station.simpy_resource.queue) if hasattr(station, 'simpy_resource') else 0
-                real_wait_time = real_queue_len * 10
+                real_wait_time = calculate_queue_wait_time(station, connector_type)
                 
                 if real_wait_time <= max_wait_minutes:
                     # Score this alternative based on REAL conditions
@@ -175,7 +182,7 @@ def charge_at_station_with_queue_tolerance(env, car_id, target_node, target_stat
             # Include target station in fallback consideration
             if has_compatible_connector([target_station], connector_type):
                 target_queue_len = len(target_station.simpy_resource.queue) if hasattr(target_station, 'simpy_resource') else 0
-                target_wait_time = target_queue_len * 10
+                target_wait_time = calculate_queue_wait_time(target_station, connector_type)
                 target_power = get_station_max_power(target_station, connector_type)
                 all_compatible_stations.append((target_station, target_queue_len, target_wait_time, target_power))
             
@@ -184,7 +191,7 @@ def charge_at_station_with_queue_tolerance(env, car_id, target_node, target_stat
                 if (station != target_station and 
                     has_compatible_connector([station], connector_type)):
                     real_queue_len = len(station.simpy_resource.queue) if hasattr(station, 'simpy_resource') else 0
-                    real_wait_time = real_queue_len * 10
+                    real_wait_time = calculate_queue_wait_time(target_station, connector_type)
                     max_power = get_station_max_power(station, connector_type)
                     
                     all_compatible_stations.append((station, real_queue_len, real_wait_time, max_power))
@@ -227,17 +234,12 @@ def charge_at_station_with_queue_tolerance(env, car_id, target_node, target_stat
         current_soc = driver.get_state_of_charge()
         print(f"[T={env.now:.1f}] Car {car_id}: Started charging at station {station_id} (current battery: {current_soc*100:.0f}%)")
         
-        # Calculate charging time based on power and battery state
-        charge_needed = target_soc - current_soc
-        
-        if charging_power > 0:
-            # Adjust charging time based on power (higher power = faster charging)
-            base_time = 10.0  # Base time for full charge at standard power (50kW)
-            power_factor = 50.0 / max(charging_power, 1.0)  # Normalize to 50kW standard
-            charging_time = base_time * charge_needed * power_factor
+        battery_capacity_kwh = driver.get_battery_capacity_kwh()
+        if charging_power > 0 and battery_capacity_kwh >0:
+            charging_time = calculate_charging_time(current_soc, target_soc, battery_capacity_kwh, charging_power)
+            charging_time = charging_time * 60 #converting to minutes
         else:
-            # Fallback to standard calculation
-            charging_time = calculate_charging_time(current_soc, target_soc)
+            charging_time = calculate_charging_time(current_soc, target_soc, battery_capacity_kwh or 75.0, 50)
         
         if charging_time > 0:
             print(f"[T={env.now:.1f}] Car {car_id}: Charging for {charging_time:.1f} time units at {charging_power}kW "
@@ -288,3 +290,43 @@ def setup_charging_resources(env, graph):
     
     print(f"Created individual SimPy resources for {total_stations_created} charging stations across {nodes_with_stations} nodes")
     return nodes_with_stations
+
+def calculate_queue_wait_time(station, connector_type):
+    """
+    Calculate realistic wait time based on charging power and typical usage patterns
+    
+    Args:
+        station: EVChargingStation object
+        connector_type: Connector type to get appropriate charging power
+        
+    Returns:
+        float: Estimated wait time in minutes
+    """
+    if not hasattr(station, 'simpy_resource'):
+        return 0.0
+    
+    queue_length = len(station.simpy_resource.queue)
+    if queue_length == 0:
+        return 0.0
+    
+    charging_power = get_station_max_power(station, connector_type)
+    if charging_power <= 0:
+        charging_power = 50.0  # Default fallback
+    
+    # Estimate average charging session based on power
+    if charging_power >= 150:  # Ultra-rapid charger
+        avg_session_minutes = 25  # Quick top-up session
+    elif charging_power >= 50:   # Rapid charger  
+        avg_session_minutes = 45  # Medium session
+    elif charging_power >= 22:   # Fast charger
+        avg_session_minutes = 90  # Longer session
+    else:  # Slow charger
+        avg_session_minutes = 180  # Very long session
+    
+    charging_factor = 0.8  # Assume 60% of full charge on average
+    estimated_session_time = avg_session_minutes * charging_factor
+    
+    total_wait_time = queue_length * estimated_session_time
+    
+    return total_wait_time
+
