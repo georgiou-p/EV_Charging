@@ -148,16 +148,11 @@ def score_individual_station(station, node, distance, planned_route, connector_t
     
     # 2. Charging speed bonus 
     max_power = get_station_max_power(station, connector_type)
-    if max_power >= 150:  # Ultra-rapid charging (150kW+)
-        speed_bonus = 200
-    elif max_power >= 50:  # Rapid charging (50-149kW)
-        speed_bonus = 100
-    elif max_power >= 22:  # Fast AC charging (22-49kW)
-        speed_bonus = 50
-    elif max_power >= 7:   # Standard charging (7-21kW)
-        speed_bonus = 20
-    else:  # Slow charging (<7kW) or unknown
-        speed_bonus = -50  # Actually penalize very slow charging
+    
+    if max_power > 0:
+        speed_bonus = max_power * 2
+    else :
+        speed_bonus = -50
     
     score += speed_bonus
     
