@@ -33,7 +33,10 @@ class SimpleEVSimulation:
             'cars_stranded': 0,
             'total_charging_events': 0,
             'total_travel_time': 0,
-            'connector_incompatibility_failures': 0
+            'connector_incompatibility_failures': 0,
+            'queue_times': [],
+            'total_queue_time': 0,
+            'queue_length': []
         }
     
     def _setup_charging_resources(self):
@@ -196,20 +199,16 @@ class SimpleEVSimulation:
             return False
 
         # Find the best station at current location
-        best_station = None
-        best_score = -1
-
+        # Collect all compatible stations with scores
+        compatible_stations = []
         for station in stations:
             if has_compatible_connector([station], connector_type):
                 # Score this station
                 score = 1000
-
-                # Queue penalty
                 queue_length = len(station.simpy_resource.queue) if hasattr(station, 'simpy_resource') else 0
                 estimated_wait_time = queue_length * 10
                 score -= estimated_wait_time * 10
 
-                # Power bonus
                 max_power = get_station_max_power(station, connector_type)
                 if max_power >= 150:
                     score += 200
@@ -220,13 +219,19 @@ class SimpleEVSimulation:
                 else:
                     score += 20
 
-                if score > best_score:
-                    best_score = score
-                    best_station = station
+                compatible_stations.append((station, score))
 
-        if not best_station:
+        if not compatible_stations:
             return False
 
+        # Use weighted random selection
+        stations_list = [opt[0] for opt in compatible_stations]
+        weights = [opt[1] for opt in compatible_stations]
+        total_weight = sum(weights)
+        probabilities = [w/total_weight for w in weights]
+
+        import random
+        best_station = random.choices(stations_list, weights=probabilities)[0]
         best_station_id = best_station.get_station_id()
         print(f"[T={self.env.now:.1f}] Car {car_id}: Selected best station at current location: {best_station_id}")
 
@@ -239,38 +244,47 @@ class SimpleEVSimulation:
     
     
     
-    def spawn_multiple_cars(self, num_cars):
-        """Spawn multiple cars """
+    def spawn_multiple_cars(self, total_cars, spawn_duration_hours=24):
+        """
+        Spawn cars gradually over a time period (default 24 hours)
+    
+        Args:
+            total_cars: Total number of cars to spawn
+            spawn_duration_hours: Time period to spread spawning over (in hours)
+        """
+        spawn_duration_minutes = spawn_duration_hours * 60  # Convert to minutes
+        interval = spawn_duration_minutes / total_cars  # Minutes between each car spawn
+
         all_nodes = list(self.graph.nodes)
-        battery_capacity_km = 300  # Maximum km car can travel with full battery
-        
-        # Define connector type distribution (based on real UK EV market)
-        connector_types = [1, 2, 3]  # Type 1, Type 2/3pin, CCS/CHAdeMO
-        connector_weights = [0.2, 0.7, 0.1]  # Type 2 most common in UK
-        
-        for car_id in range(1, num_cars + 1):
-            # Pick random source and destination
+        battery_capacity_km = 300
+
+        # Define connector type distribution
+        connector_types = [1, 2, 3]
+        connector_weights = [0.2, 0.7, 0.1]
+
+        for car_id in range(1, total_cars + 1):
+            # Wait before spawning next car
+            if car_id > 1:  # Don't wait for the first car
+                yield self.env.timeout(interval)
+
+            # Pick random source and destination (existing logic)
             while True:
                 source = random.choice(all_nodes)
                 destination = random.choice(all_nodes)
-        
+
                 if source != destination:
                     test_driver = EVDriver(source, destination, 1.0, 20, battery_capacity_km)
                     path = test_driver.find_shortest_path(self.graph)
                     if path:
-                        # Check path distance 
                         total_distance_km = test_driver._calculate_path_distance(self.graph, path)
-                        # Accept routes between 100km and 550km 
                         if 100 <= total_distance_km <= 550:
                             break
-                        else:
-                            print(f"We need a trip between 100 to 550Km. Rerandomising...")
-         
-            initial_soc = random.uniform(0.6, 0.9)  # Start with 60-90% battery
+                            
+            initial_soc = random.uniform(0.6, 0.9)
             connector_type = random.choices(connector_types, weights=connector_weights)[0]
-        
-            print(f"Spawning car {car_id} from {source} to {destination} with battery capacity {battery_capacity_km}Km, SoC {initial_soc:.2f}, and Connector: {connector_type}")
-        
+
+            print(f"[T={self.env.now:.1f}] Spawning car {car_id} from {source} to {destination}")
+
             self.env.process(self.car_process(car_id, path, initial_soc, connector_type, total_distance_km, battery_capacity_km))
             self.stats['cars_spawned'] += 1
     
@@ -280,7 +294,7 @@ class SimpleEVSimulation:
         print(f"Graph has {len(self.graph.nodes)} nodes")
         
         # Spawn cars
-        self.spawn_multiple_cars(num_cars=1000)  # NUMBER OF CARSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS
+        self.env.process(self.spawn_multiple_cars(total_cars=10000, spawn_duration_hours=24))  # NUMBER OF CARSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS
         
         # Run simulation
         if self.simulation_time:
@@ -298,6 +312,16 @@ class SimpleEVSimulation:
         print(f"Cars stranded: {self.stats['cars_stranded']}")
         print(f"Total charging events: {self.stats['total_charging_events']}")
         print(f"Connector incompatibility failures: {self.stats['connector_incompatibility_failures']}")
+        print(f"Queue statistics:")
+        queue_times = self.stats['queue_times']
+        queue_length = self.stats['queue_length']
+        print(f"  Average queue time: {sum(queue_times)/len(queue_times):.2f} mins")
+        print(f"  Min queue time: {min(queue_times):.2f} mins")
+        print(f"  Max queue time: {max(queue_times):.2f} mins")
+        print(f"  Total cars that queued: {len(queue_times)}")
+        print(f"  Average queue length: {sum(queue_length)/len(queue_length):.2f} cars")
+        print(f"  Min queue length: {min(queue_length)} cars")
+        print(f"  Max queue length: {max(queue_length)} cars")
         
         # Calculate success rate
         if self.stats['cars_spawned'] > 0:

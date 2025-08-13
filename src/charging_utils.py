@@ -169,10 +169,22 @@ def charge_at_station_with_queue_tolerance(env, car_id, target_node, target_stat
                     print(f"[T={env.now:.1f}] Car {car_id}: Alternative {station.get_station_id()}: {real_queue_len} cars, {real_wait_time} min, {max_power}kW, score={score}")
         
         if alternative_options:
-            # Pick best alternative based on REAL conditions
-            alternative_options.sort(key=lambda x: x[1], reverse=True)
-            chosen_station, best_score, queue_len, wait_time, max_power = alternative_options[0]
-            print(f"[T={env.now:.1f}] Car {car_id}: RE-SELECTED {chosen_station.get_station_id()} based on REAL conditions: {queue_len} cars ({wait_time} min wait, {max_power}kW)")
+            # Instead of picking best score, use weighted random selection
+            stations_for_random = [opt[0] for opt in alternative_options]  # Get station objects
+            weights = [opt[1] for opt in alternative_options]  # Get scores as weights
+    
+            # Normalize weights to probabilities
+            total_weight = sum(weights)
+            probabilities = [w/total_weight for w in weights]
+
+            import random
+            chosen_station = random.choices(stations_for_random, weights=probabilities)[0]
+
+            # Find the matching option for logging
+            chosen_option = next(opt for opt in alternative_options if opt[0] == chosen_station)
+            _, best_score, queue_len, wait_time, max_power = chosen_option
+            
+            print(f"[T={env.now:.1f}] Car {car_id}: RANDOMLY selected {chosen_station.get_station_id()} (weighted by score {best_score:.0f}): {queue_len} cars ({wait_time} min wait, {max_power}kW)")
         else:
             # FALLBACK: No acceptable alternatives, find station with smallest wait time (including target)
             print(f"[T={env.now:.1f}] Car {car_id}: No acceptable alternatives at node {target_node}")
@@ -221,6 +233,7 @@ def charge_at_station_with_queue_tolerance(env, car_id, target_node, target_stat
         print(f"[T={env.now:.1f}] Car {car_id}: Station {station_id} has no SimPy resource!")
         return False
     
+    queue_start_time = env.now
     # Request charging point at the chosen station
     with chosen_station.simpy_resource.request() as request:
         # Wait for an available charging point
@@ -228,8 +241,17 @@ def charge_at_station_with_queue_tolerance(env, car_id, target_node, target_stat
         if queue_position > 1:
             print(f"[T={env.now:.1f}] Car {car_id}: Waiting in queue (position {queue_position}) at station {station_id}")
         
+        #QUEUE STATS
+        current_queue_length = len(chosen_station.simpy_resource.queue)
+        stats['queue_length'].append(current_queue_length)
         yield request
-        
+        queue_end_time = env.now
+        current_queue_length = len(chosen_station.simpy_resource.queue)
+        queue_time = queue_end_time - queue_start_time
+        if queue_time > 0:
+            stats['queue_times'].append(queue_time)
+            stats['total_queue_time'] += queue_time
+                    
         # Start charging
         current_soc = driver.get_state_of_charge()
         print(f"[T={env.now:.1f}] Car {car_id}: Started charging at station {station_id} (current battery: {current_soc*100:.0f}%)")
