@@ -4,7 +4,7 @@ import cProfile
 from station_assignment import assign_charging_stations_to_nodes
 from evDriver import EVDriver
 from pathfinding import (
-    find_nearest_charging_station_simplified, 
+    find_nearest_charging_station, 
     travel_to_charging_station,
     travel_to_next_node
 )
@@ -43,7 +43,7 @@ class SimpleEVSimulation:
     
     def car_process(self, car_id, path, initial_soc, connector_type, total_distance_km, battery_capacity_km):
         """
-        SimPy process representing one car's journey with connector compatibility
+        SimPy process representing one car's journey
         """
         source_node = path[0]
         destination_node = path[-1]
@@ -54,7 +54,6 @@ class SimpleEVSimulation:
         driver.set_current_path(path)
         
         # Configuration - battery range in kilometers
-        print(f"[T={self.env.now:.1f}] Car {car_id}: Using pre-calculated route with {len(path)} traverses")        
         current_range_km = driver.get_range_remaining()
         print(f"[T={self.env.now:.1f}] Car {car_id}: Can travel {current_range_km:.2f}km out of {total_distance_km:.2f}km with current battery")
         
@@ -95,7 +94,7 @@ class SimpleEVSimulation:
             # Travel to next node
             yield from travel_to_next_node(self.env, car_id, driver, self.graph, travel_time_per_km=0.01)
             
-            # Check if we've somehow run out of battery (safety check)
+            # Check if we've somehow run out of battery 
             if driver.is_battery_empty():
                 print(f"[T={self.env.now:.1f}] Car {car_id}: STRANDED! Battery empty at node {driver.get_current_node()}")
                 self.stats['cars_stranded'] += 1
@@ -113,11 +112,12 @@ class SimpleEVSimulation:
     
     def _handle_charging_stop(self, car_id, driver, max_wait_minutes=20):
         """
-        Simplified charging process with proper path restoration:
+        Charging process with proper path restoration:
         1. Find best station and go there
         2. If queue > max_wait_minutes, find alternative at same node  
         3. If no alternatives at node, find other stations within reach
         4. After charging, recalculate path from charging location to destination
+        5. Reacalculate pathb from charing station to next node
         """
         current_node = driver.get_current_node()
         current_range_km = driver.get_range_remaining()
@@ -128,7 +128,7 @@ class SimpleEVSimulation:
         print(f"[T={self.env.now:.1f}] Car {car_id}: Need charging, looking for best station within {current_range_km:.1f}km range")
 
         # Step 1: Find best station within reach
-        result = find_nearest_charging_station_simplified(
+        result = find_nearest_charging_station(
             self.graph, current_node, planned_route, current_range_km, connector_type
         )
 
@@ -163,35 +163,23 @@ class SimpleEVSimulation:
             # Note: Enhanced fallback could search for other locations here
             return False
 
-        # Step 5: CRUCIAL - Recalculate path from charging location to destination
+        # Step 5: Recalculate path from charging location to destination
         print(f"[T={self.env.now:.1f}] Car {car_id}: Charging complete, recalculating route from {target_node} to {destination_node}")
 
-        # Update the driver's source to current charging location
         driver.set_source_node(target_node)
-
-        # Calculate new path from charging station to destination
         new_path = driver.find_shortest_path(self.graph)
 
         if not new_path:
-            print(f"[T={self.env.now:.1f}] Car {car_id}: CRITICAL ERROR - No path from charging station {target_node} to destination {destination_node}!")
+            print(f"[T={self.env.now:.1f}] Car {car_id}: ERROR - No path from charging station {target_node} to destination {destination_node}!")
             return False
 
-        # Calculate new route distance
-        new_distance_km = driver._calculate_path_distance(self.graph, new_path)
-        print(f"[T={self.env.now:.1f}] Car {car_id}: New route calculated: {len(new_path)} nodes, {new_distance_km:.2f}km remaining")
         print(f"[T={self.env.now:.1f}] Car {car_id}: Resuming journey from {target_node} to {destination_node}")
-
-        # Log the new path for debugging
-        if len(new_path) <= 10:
-            print(f"[T={self.env.now:.1f}] Car {car_id}: New path: {new_path}")
-        else:
-            print(f"[T={self.env.now:.1f}] Car {car_id}: New path: {new_path[:10]}... (total {len(new_path)} nodes)")
 
         return True
         
     def _charge_at_current_location(self, car_id, driver, current_node):
         """
-        Try to charge at the current location using the simplified approach
+        Try to charge at the current location --> For revaluation and if it can't reach next node
         """
         stations = self.graph.nodes[current_node]['charging_stations']
         if not stations:
@@ -252,7 +240,7 @@ class SimpleEVSimulation:
     
     
     def spawn_multiple_cars(self, num_cars):
-        """Spawn multiple cars for testing with different connector types"""
+        """Spawn multiple cars """
         all_nodes = list(self.graph.nodes)
         battery_capacity_km = 300  # Maximum km car can travel with full battery
         
@@ -272,7 +260,7 @@ class SimpleEVSimulation:
                     if path:
                         # Check path distance 
                         total_distance_km = test_driver._calculate_path_distance(self.graph, path)
-                        # Accept routes between 100km and 550km (reasonable range)
+                        # Accept routes between 100km and 550km 
                         if 100 <= total_distance_km <= 550:
                             break
                         else:
@@ -288,11 +276,11 @@ class SimpleEVSimulation:
     
     def run_simulation(self):
         """Run the simulation"""
-        print("=== Starting EV Simulation with Connector Compatibility ===")
+        print("=== Starting EV Simulation===")
         print(f"Graph has {len(self.graph.nodes)} nodes")
         
         # Spawn cars
-        self.spawn_multiple_cars(num_cars=10000)  # NUMBER OF CARS
+        self.spawn_multiple_cars(num_cars=1000)  # NUMBER OF CARSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS
         
         # Run simulation
         if self.simulation_time:

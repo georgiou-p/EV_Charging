@@ -21,24 +21,6 @@ def has_compatible_connector(charging_stations, connector_type):
                 return True
     return False
 
-def get_compatible_stations(charging_stations, connector_type):
-    """
-    Filter stations that have compatible connectors
-    
-    Args:
-        charging_stations: List of EVChargingStation objects
-        connector_type: Required connector type
-        
-    Returns:
-        list: List of compatible EVChargingStation objects
-    """
-    compatible_stations = []
-    for station in charging_stations:
-        for connection in station.get_connections():
-            if connection.connection_type_id == connector_type or connection.connection_type_id == 0:
-                compatible_stations.append(station)
-                break  # Found compatible connector, no need to check other connections
-    return compatible_stations
 
 def get_station_max_power(station, connector_type):
     """
@@ -121,7 +103,7 @@ def charge_at_station_with_queue_tolerance(env, car_id, target_node, target_stat
     
     connector_type = driver.get_connector_type()
     
-    # Find the target station (the one chosen based on predictions)
+    # Find the target station which was chosen based on predictions
     target_station = None
     for station in stations:
         if station.get_station_id() == target_station_id:
@@ -137,7 +119,7 @@ def charge_at_station_with_queue_tolerance(env, car_id, target_node, target_stat
         print(f"[T={env.now:.1f}] Car {car_id}: Target station {target_station_id} no longer compatible with connector {connector_type}")
         return False
     
-    # RE-EVALUATE: Check REAL queue conditions at target station upon arrival
+    # RE-EVALUATE: Check the REAL queue conditions at target when driver arrives
     current_queue = len(target_station.simpy_resource.queue) if hasattr(target_station, 'simpy_resource') else 0
     estimated_wait_minutes = current_queue * 10  # Assume 10 minutes per car ahead
     
@@ -306,20 +288,3 @@ def setup_charging_resources(env, graph):
     
     print(f"Created individual SimPy resources for {total_stations_created} charging stations across {nodes_with_stations} nodes")
     return nodes_with_stations
-
-# Legacy functions kept for backward compatibility (if needed elsewhere)
-def get_charging_resource(graph, node):
-    """
-    DEPRECATED: Get the SimPy resource for charging at a specific node
-    This function is kept for backward compatibility but should not be used
-    Individual stations now have their own simpy_resource attribute
-    
-    Args:
-        graph: NetworkX graph with charging stations
-        node: Node ID to get charging resource for
-        
-    Returns:
-        None: Always returns None as this approach is deprecated
-    """
-    print("WARNING: get_charging_resource() is deprecated. Use individual station resources instead.")
-    return None

@@ -23,7 +23,7 @@ def get_shortest_path(graph, source_node, destination_node):
         print(f"    No path found from {source_node} to {destination_node}")
         return None
 
-def find_nearest_charging_station_simplified(graph, current_node, planned_route, max_range, connector_type, driver=None):
+def find_nearest_charging_station(graph, current_node, planned_route, max_range, connector_type, driver=None):
     """
     Find the best charging station considering route optimization with correct position tracking
     Returns specific station ID to go to directly
@@ -120,9 +120,7 @@ def find_nearest_charging_station_simplified(graph, current_node, planned_route,
             route_context = f"on-route behind (pos {best_node_position})"
         else:
             route_context = f"current location (pos {best_node_position})"
-    
-    print(f"     Selected: {best_station_id} at node {best_node} ({route_context}, score={best_score:.0f})")
-    return best_node, best_station_id
+        return best_node, best_station_id
 
 
 def score_individual_station(station, node, distance, planned_route, connector_type, current_route_position=0):
@@ -142,13 +140,13 @@ def score_individual_station(station, node, distance, planned_route, connector_t
     """
     score = 1000  # Base score
     
-    # 1. Queue penalty (most important) - predictive based on current state
+    # 1. Queue penalty - predictive based on current state
     queue_length = len(station.simpy_resource.queue) if hasattr(station, 'simpy_resource') else 0
-    estimated_wait_time = queue_length * 10  # Estimate 10 minutes per car in queue
+    estimated_wait_time = queue_length * 10  # Estimate 10 minutes per car in queue !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!CHANGE THAT
     queue_penalty = estimated_wait_time * 10  # Heavy penalty for predicted wait time
     score -= queue_penalty
     
-    # 2. Charging speed bonus (second most important)
+    # 2. Charging speed bonus 
     max_power = get_station_max_power(station, connector_type)
     if max_power >= 150:  # Ultra-rapid charging (150kW+)
         speed_bonus = 200
@@ -163,7 +161,7 @@ def score_individual_station(station, node, distance, planned_route, connector_t
     
     score += speed_bonus
     
-    # 3. Route optimization (major factor) - FIXED WITH CORRECT POSITION LOGIC
+    # 3. Route optimization 
     route_factor = 1.0
     route_description = "OFF_ROUTE"
     
@@ -212,17 +210,12 @@ def score_individual_station(station, node, distance, planned_route, connector_t
             route_description = f"MAJOR_DETOUR_{distance:.1f}KM"
     
     # 4. Distance penalty (minor factor - already considered in route scoring)
-    distance_penalty = distance * 0.3  # Reduced from 0.5 since route factor handles most distance logic
+    distance_penalty = distance * 0.3  
     score -= distance_penalty
     
-    # Apply route factor (this is where the major differentiation happens)
+    # Apply route factor 
     score *= route_factor
     
-    # Debug logging for route scoring decisions (uncomment for detailed analysis)
-    # if node in planned_route:
-    #     route_pos = planned_route.index(node)
-    #     print(f"        Node {node}: pos {route_pos} vs current {current_route_position}, "
-    #           f"factor {route_factor:.1f} ({route_description})")
     
     return max(score, 0)  # Ensure non-negative scores
 
@@ -342,38 +335,38 @@ def travel_to_next_node(env, car_id, driver, graph, travel_time_per_km=0.01):
     print(f"[T={env.now:.1f}] Car {car_id}: Moved to node {next_node} (traveled {distance_km:.2f}km), SoC: {driver.get_state_of_charge():.2f} ({driver.battery_percentage:.0f}%)")
 
 
-def find_nearest_nodes_with_stations(graph, current_node, max_distance=50, connector_type=None): 
-    """
-    Find nearest nodes with charging stations using weighted distances
-    Optionally filter by connector compatibility
+# def find_nearest_nodes_with_stations(graph, current_node, max_distance=50, connector_type=None): 
+#     """
+#     Find nearest nodes with charging stations using weighted distances
+#     Optionally filter by connector compatibility
     
-    Args:
-        graph: NetworkX graph with charging stations and weighted edges
-        current_node: Current node position
-        max_distance: Maximum distance to search (in km)
-        connector_type: Optional connector type filter
+#     Args:
+#         graph: NetworkX graph with charging stations and weighted edges
+#         current_node: Current node position
+#         max_distance: Maximum distance to search (in km)
+#         connector_type: Optional connector type filter
         
-    Returns:
-        list: List of tuples (node_id, distance_km) sorted by distance
-    """
-    nearby_stations = []
+#     Returns:
+#         list: List of tuples (node_id, distance_km) sorted by distance
+#     """
+#     nearby_stations = []
     
-    try:
-        distances = nx.single_source_dijkstra_path_length(graph, current_node, cutoff=max_distance, weight='weight')
+#     try:
+#         distances = nx.single_source_dijkstra_path_length(graph, current_node, cutoff=max_distance, weight='weight')
         
-        for node, distance in distances.items():
-            if node != current_node and 'charging_stations' in graph.nodes[node]:
-                stations = graph.nodes[node]['charging_stations']
-                if stations:
-                    # Apply connector filter if specified
-                    if connector_type is None or has_compatible_connector(stations, connector_type):
-                        nearby_stations.append((node, distance))
+#         for node, distance in distances.items():
+#             if node != current_node and 'charging_stations' in graph.nodes[node]:
+#                 stations = graph.nodes[node]['charging_stations']
+#                 if stations:
+#                     # Apply connector filter if specified
+#                     if connector_type is None or has_compatible_connector(stations, connector_type):
+#                         nearby_stations.append((node, distance))
         
-        # Sort by distance
-        nearby_stations.sort(key=lambda x: x[1])
+#         # Sort by distance
+#         nearby_stations.sort(key=lambda x: x[1])
         
-    except nx.NodeNotFound:
-        print(f"Error: Node {current_node} not found in graph")
-        pass
+#     except nx.NodeNotFound:
+#         print(f"Error: Node {current_node} not found in graph")
+#         pass
     
-    return nearby_stations
+#     return nearby_stations

@@ -146,10 +146,6 @@ class EVDriver:
     def can_reach_next_node(self, graph):
         """
         Check if the car can reach the next node in its path
-        
-        Args:
-            graph: NetworkX graph
-            battery_range_km: Maximum range with full battery
             
         Returns:
             bool: True if car can reach next node, False otherwise
@@ -158,15 +154,12 @@ class EVDriver:
         current_path = self.get_current_path()
         current_index = self.get_current_position_index()
         
-        # If we're at the destination, return True
         if self.has_reached_destination():
             return True
-        
         # If no path or at end of path, return True (no next node to reach)
         if not current_path or current_index >= len(current_path) - 1:
             return True
         
-        # Get next node
         next_node = current_path[current_index + 1]
         
         # Check if edge exists and get distance
