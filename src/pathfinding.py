@@ -121,6 +121,11 @@ def find_nearest_charging_station(graph, current_node, planned_route, max_range,
         else:
             route_context = f"current location (pos {best_node_position})"
         return best_node, best_station_id
+    if driver:
+        expected_wait = calculate_queue_wait_time(best_station, connector_type)
+        
+        # NEW: Record expectations using already-calculated values
+        driver.set_charging_expectation(best_distance, best_station_id)
     return best_node,best_station_id
 
 
@@ -143,7 +148,7 @@ def score_individual_station(station, node, distance, planned_route, connector_t
     
     # 1. Queue penalty - predictive based on current state
     queue_length = len(station.simpy_resource.queue) if hasattr(station, 'simpy_resource') else 0
-    estimated_wait_time = calculate_queue_wait_time(station, connector_type)  # Estimate 10 minutes per car in queue !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!CHANGE THAT
+    estimated_wait_time = calculate_queue_wait_time(station, connector_type)  
     queue_penalty = estimated_wait_time * 10  # Heavy penalty for predicted wait time
     score -= queue_penalty
     
@@ -166,9 +171,9 @@ def score_individual_station(station, node, distance, planned_route, connector_t
             route_position = planned_route.index(node)
             
             if route_position > current_route_position:
-                # Station is AHEAD on our planned route - STRONG PREFERENCE
+                # Station is AHEAD on our planned route
                 positions_ahead = route_position - current_route_position
-                # Give bigger bonus for stations further ahead (more strategic)
+                # Give bigger bonus for stations further ahead 
                 if positions_ahead >= 3:
                     route_factor = 2.2  # Big bonus for strategic forward planning
                 else:
@@ -176,7 +181,7 @@ def score_individual_station(station, node, distance, planned_route, connector_t
                 route_description = f"AHEAD_{positions_ahead}_NODES"
                 
             elif route_position < current_route_position:
-                # Station is BEHIND us on route - DISCOURAGE BACKTRACKING
+                # Station is BEHIND us on route 
                 positions_behind = current_route_position - route_position
                 if positions_behind >= 3:
                     route_factor = 0.4  # Heavy penalty for going way back
@@ -238,22 +243,7 @@ def get_station_max_power(station, connector_type):
 
 def travel_to_charging_station(env, car_id, current_node, charging_node, graph, driver, travel_time_per_unit=0.75):
     """
-    Handle travel from current location to a charging station using weighted distances
-    
-    Args:
-        env: SimPy environment
-        car_id: Car identifier
-        current_node: Starting node
-        charging_node: Destination charging station node
-        graph: NetworkX graph for pathfinding with weighted edges
-        driver: EVDriver object for battery management
-        travel_time_per_unit: Time per distance unit in simulation units
-        
-    Yields:
-        SimPy timeout events for travel time
-        
-    Returns:
-        bool: True if travel successful, False if no path found
+    UPDATED: Compare actual distance against driver's expectation
     """
     print(f"[T={env.now:.1f}] Car {car_id}: Traveling to charging station at node {charging_node}")
     
@@ -266,24 +256,26 @@ def travel_to_charging_station(env, car_id, current_node, charging_node, graph, 
     
     print(f"[T={env.now:.1f}] Car {car_id}: Route to charging station: {path_to_station[:5]}{'...' if len(path_to_station) > 5 else ''}")
     
-    # Calculate total weighted distance for the path
-    total_distance = 0
+    # Calculate actual distance traveled
+    actual_distance = 0
     for i in range(len(path_to_station) - 1):
         node1, node2 = path_to_station[i], path_to_station[i + 1]
         if graph.has_edge(node1, node2):
-            total_distance += graph.edges[node1, node2]['weight']
+            actual_distance += graph.edges[node1, node2]['weight']
     
-    if total_distance > 0:
+    if actual_distance > 0:
         # Simulate travel time based on actual distance
-        total_travel_time = total_distance * travel_time_per_unit
-        yield env.timeout(total_travel_time)
+        actual_travel_time = actual_distance * travel_time_per_unit
+        yield env.timeout(actual_travel_time)
 
         # Update battery based on actual distance traveled
         consumption_per_km = 1.0 / driver.get_battery_capacity()
-        battery_consumption = total_distance * consumption_per_km
+        battery_consumption = actual_distance * consumption_per_km
         driver.consume_battery(battery_consumption)
 
-        print(f"[T={env.now:.1f}] Car {car_id}: Arrived at charging station (node {charging_node}) - traveled {total_distance:.2f}km, SoC: {driver.get_state_of_charge():.2f} ({driver.battery_percentage:.0f}%)")
+       
+        print(f"[T={env.now:.1f}] Car {car_id}: Arrived at charging station (node {charging_node}) - "
+              f"traveled {actual_distance:.2f}km, SoC: {driver.get_state_of_charge():.2f} ({driver.battery_percentage:.0f}%)")
     else:
         print(f"[T={env.now:.1f}] Car {car_id}: Already at charging station location")
     

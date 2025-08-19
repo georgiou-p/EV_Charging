@@ -1,6 +1,7 @@
 import simpy
 import random
 import cProfile
+import networkx as nx
 from station_assignment import assign_charging_stations_to_nodes
 from evDriver import EVDriver
 from pathfinding import (
@@ -36,8 +37,13 @@ class SimpleEVSimulation:
             'connector_incompatibility_failures': 0,
             'queue_times': [],
             'total_queue_time': 0,
-            'queue_length': []
+            'queue_length': [],
+            'anxiety_levels': []
         }
+    def _record_anxiety(self, driver):
+        """Record current anxiety level"""
+        anxiety = driver.get_current_anxiety()
+        self.stats['anxiety_levels'].append(anxiety)
     
     def _setup_charging_resources(self):
         """Setup SimPy resources for nodes that already have charging stations"""
@@ -55,6 +61,8 @@ class SimpleEVSimulation:
         # Create the driver/car
         driver = EVDriver(source_node, destination_node, initial_soc, connector_type, battery_capacity_km)
         driver.set_current_path(path)
+
+        self._record_anxiety(driver)
         
         # Configuration - battery range in kilometers
         current_range_km = driver.get_range_remaining()
@@ -63,10 +71,16 @@ class SimpleEVSimulation:
         #--------------------MAIN JOURNEY LOOP----------
         loop_counter = 0
         max_loops = len(path) * 2  # Safety limit to prevent infinite loops
+        last_decay_time = self.env.now
         
         while not driver.has_reached_destination() and loop_counter < max_loops:
             loop_counter += 1
             current_node = driver.get_current_node()
+
+            time_since_decay = self.env.now - last_decay_time
+            if time_since_decay >= 60:  # Every 60 simulation time units (1 hour)
+                driver.decay_penalties()
+                last_decay_time = self.env.now
             
             # Check if we can make the next move
             if not driver.can_reach_next_node(self.graph):
@@ -113,7 +127,7 @@ class SimpleEVSimulation:
         self.stats['cars_completed'] += 1
     
     
-    def _handle_charging_stop(self, car_id, driver, max_wait_minutes=20):
+    def _handle_charging_stop(self, car_id, driver):
         """
         Charging process with proper path restoration:
         1. Find best station and go there
@@ -156,15 +170,15 @@ class SimpleEVSimulation:
 
         # Step 3: Try to charge with queue tolerance
         charging_success = yield from charge_at_station_with_queue_tolerance(
-            self.env, car_id, target_node, target_station_id, self.graph, self.stats, driver, max_wait_minutes
-        )
+            self.env, car_id, target_node, target_station_id, self.graph, self.stats, driver)
+        self._record_anxiety(driver) 
 
         # Step 4: Handle charging failure
         if not charging_success:
             print(f"[T={self.env.now:.1f}] Car {car_id}: Charging failed at node {target_node}")
             print(f"[T={self.env.now:.1f}] Car {car_id}: No acceptable charging options found")
             # Note: Enhanced fallback could search for other locations here
-            return False
+
 
         # Step 5: Recalculate path from charging location to destination
         print(f"[T={self.env.now:.1f}] Car {car_id}: Charging complete, recalculating route from {target_node} to {destination_node}")
@@ -237,8 +251,7 @@ class SimpleEVSimulation:
 
         # Use the queue tolerance charging function
         charging_success = yield from charge_at_station_with_queue_tolerance(
-            self.env, car_id, current_node, best_station_id, self.graph, self.stats, driver, max_wait_minutes=20
-        )
+            self.env, car_id, current_node, best_station_id, self.graph, self.stats, driver)
 
         return charging_success
     
@@ -247,39 +260,41 @@ class SimpleEVSimulation:
     def spawn_multiple_cars(self, total_cars, spawn_duration_hours=24):
         """
         Spawn cars gradually over a time period (default 24 hours)
-    
-        Args:
-            total_cars: Total number of cars to spawn
-            spawn_duration_hours: Time period to spread spawning over (in hours)
         """
-        spawn_duration_minutes = spawn_duration_hours * 60  # Convert to minutes
-        interval = spawn_duration_minutes / total_cars  # Minutes between each car spawn
-
+        spawn_duration_minutes = spawn_duration_hours * 60
+        interval = spawn_duration_minutes / total_cars
         all_nodes = list(self.graph.nodes)
         battery_capacity_km = 300
 
-        # Define connector type distribution
         connector_types = [1, 2, 3]
         connector_weights = [0.2, 0.7, 0.1]
 
         for car_id in range(1, total_cars + 1):
             # Wait before spawning next car
-            if car_id > 1:  # Don't wait for the first car
+            if car_id > 1:
                 yield self.env.timeout(interval)
 
-            # Pick random source and destination (existing logic)
-            while True:
+          
+            while True:  # Keep trying until we find a valid route
                 source = random.choice(all_nodes)
                 destination = random.choice(all_nodes)
 
                 if source != destination:
-                    test_driver = EVDriver(source, destination, 1.0, 20, battery_capacity_km)
-                    path = test_driver.find_shortest_path(self.graph)
-                    if path:
-                        total_distance_km = test_driver._calculate_path_distance(self.graph, path)
-                        if 100 <= total_distance_km <= 550:
-                            break
-                            
+                    try:
+                        path = nx.shortest_path(self.graph, source, destination, weight='weight')
+                        if path:
+                            # Calculate total distance
+                            total_distance_km = 0
+                            for i in range(len(path) - 1):
+                                node1, node2 = path[i], path[i + 1]  
+                                if self.graph.has_edge(node1, node2):
+                                    total_distance_km += self.graph.edges[node1, node2]['weight']
+
+                            if 100 <= total_distance_km <= 500:
+                                break  # Valid route found, exit the while loop
+                    except nx.NetworkXNoPath:
+                        continue  # No path found, try again
+                        
             initial_soc = random.uniform(0.6, 0.9)
             connector_type = random.choices(connector_types, weights=connector_weights)[0]
 
@@ -315,25 +330,52 @@ class SimpleEVSimulation:
         print(f"Queue statistics:")
         queue_times = self.stats['queue_times']
         queue_length = self.stats['queue_length']
-        print(f"  Average queue time: {sum(queue_times)/len(queue_times):.2f} mins")
-        print(f"  Min queue time: {min(queue_times):.2f} mins")
-        print(f"  Max queue time: {max(queue_times):.2f} mins")
-        print(f"  Total cars that queued: {len(queue_times)}")
-        print(f"  Average queue length: {sum(queue_length)/len(queue_length):.2f} cars")
-        print(f"  Min queue length: {min(queue_length)} cars")
-        print(f"  Max queue length: {max(queue_length)} cars")
-        
+        if queue_times:
+            print(f"  Average queue time: {sum(queue_times)/len(queue_times):.2f} mins")
+            print(f"  Min queue time: {min(queue_times):.2f} mins")
+            print(f"  Max queue time: {max(queue_times):.2f} mins")
+            print(f"  Total cars that queued: {len(queue_times)}")
+        else:
+            print(f"  No cars experienced queue time (all found empty stations)")
+            print(f"  Total cars that queued: 0")
+
+        if queue_length:
+            print(f"  Average queue length: {sum(queue_length)/len(queue_length):.2f} cars")
+            print(f"  Min queue length: {min(queue_length)} cars")
+            print(f"  Max queue length: {max(queue_length)} cars")
+        else:
+            print(f"  No queue length data recorded")
+
         # Calculate success rate
         if self.stats['cars_spawned'] > 0:
             success_rate = (self.stats['cars_completed'] / self.stats['cars_spawned']) * 100
             print(f"Journey completion rate: {success_rate:.1f}%")
-            
+
             if self.stats['connector_incompatibility_failures'] > 0:
                 incompatibility_rate = (self.stats['connector_incompatibility_failures'] / self.stats['cars_spawned']) * 100
                 print(f"Connector incompatibility rate: {incompatibility_rate:.1f}%")
-        
+
         if self.stats['cars_completed'] == 0 and self.stats['cars_spawned'] > 0:
             print("No cars completed their journey - they may be stranded or need more time!")
+            # Calculate success rate
+            if self.stats['cars_spawned'] > 0:
+                success_rate = (self.stats['cars_completed'] / self.stats['cars_spawned']) * 100
+                print(f"Journey completion rate: {success_rate:.1f}%")
+
+                if self.stats['connector_incompatibility_failures'] > 0:
+                    incompatibility_rate = (self.stats['connector_incompatibility_failures'] / self.stats['cars_spawned']) * 100
+                    print(f"Connector incompatibility rate: {incompatibility_rate:.1f}%")
+
+            if self.stats['cars_completed'] == 0 and self.stats['cars_spawned'] > 0:
+                    print("No cars completed their journey - they may be stranded or need more time!")
+
+        # Simple anxiety statistics
+        if self.stats['anxiety_levels']:
+            print(f"Average anxiety: {sum(self.stats['anxiety_levels'])/len(self.stats['anxiety_levels']):.4f}")
+            print(f"Maximum anxiety: {max(self.stats['anxiety_levels']):.4f}")
+            print(f"Minimum anxiety: {min(self.stats['anxiety_levels']):.4f}")
+        else:
+         print("No anxiety data collected")
 
 
 
@@ -344,6 +386,7 @@ def main():
     geojson_path = "data/UK_Mainland_GB_simplified.geojson"
     stations_json_path = "data/cleaned_charging_stations.json"
     
+    random.seed(123)
     try:
         graph, node_stations = assign_charging_stations_to_nodes(
             geojson_path, 

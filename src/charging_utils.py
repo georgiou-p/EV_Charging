@@ -77,8 +77,7 @@ def calculate_charging_time(current_soc, target_soc, battery_capacity_kwh, charg
     
     return time_hours
 
-def charge_at_station_with_queue_tolerance(env, car_id, target_node, target_station_id, graph, stats, driver, 
-                                         max_wait_minutes=20, target_soc=0.8):
+def charge_at_station_with_queue_tolerance(env, car_id, target_node, target_station_id, graph, stats, driver, target_soc=0.8):
     """
     Try to charge at specific station (chosen based on predictions). 
     Re-evaluate with REAL conditions upon arrival.
@@ -133,6 +132,8 @@ def charge_at_station_with_queue_tolerance(env, car_id, target_node, target_stat
     print(f"[T={env.now:.1f}] Car {car_id}: REAL conditions at target station {target_station_id}: {current_queue} cars in queue (est. {estimated_wait_minutes} min wait)")
     
     chosen_station = target_station
+
+    max_wait_minutes = 20  # Fixed value for queue tolerance
     
     # If REAL queue is worse than acceptable, RE-EVALUATE alternatives at this node
     if estimated_wait_minutes > max_wait_minutes:
@@ -249,6 +250,7 @@ def charge_at_station_with_queue_tolerance(env, car_id, target_node, target_stat
         current_queue_length = len(chosen_station.simpy_resource.queue)
         queue_time = queue_end_time - queue_start_time
         if queue_time > 0:
+            driver.add_queue_penalty(queue_time)
             stats['queue_times'].append(queue_time)
             stats['total_queue_time'] += queue_time
                     
