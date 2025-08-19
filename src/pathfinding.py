@@ -124,8 +124,6 @@ def find_nearest_charging_station(graph, current_node, planned_route, max_range,
     if driver:
         expected_wait = calculate_queue_wait_time(best_station, connector_type)
         
-        # NEW: Record expectations using already-calculated values
-        driver.set_charging_expectation(best_distance, best_station_id)
     return best_node,best_station_id
 
 
@@ -243,7 +241,7 @@ def get_station_max_power(station, connector_type):
 
 def travel_to_charging_station(env, car_id, current_node, charging_node, graph, driver, travel_time_per_unit=0.75):
     """
-    UPDATED: Compare actual distance against driver's expectation
+    Handle travelling ffrom current location to charging station
     """
     print(f"[T={env.now:.1f}] Car {car_id}: Traveling to charging station at node {charging_node}")
     

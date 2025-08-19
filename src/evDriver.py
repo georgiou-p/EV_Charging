@@ -13,29 +13,25 @@ class EVDriver:
         self.current_path = []
         self.current_position_index = 0
         self.battery_capacity_km = battery_capacity_km
-        
         # Anxiety model
         self.anxiety_model = Anxiety()
-        
-        # Track penalties for anxiety computation (in minutes)
+        # Track penalties
         self.current_penalties = {
             'queue_time': 0.0,
             'slow_charger_time': 0.0,
-            'threshold_penalty': 0.0  # NEW: Penalty for being below threshold
+            'threshold_penalty': 0.0  #Penalty for being below threshold
         }
         
         # Energy and battery settings
         self.energy_consumption_kwh_per_km = 0.25
         self.battery_capacity_kwh = battery_capacity_km * self.energy_consumption_kwh_per_km
         
-        # NEW: Threshold anxiety tracking
+        #Threshod anxiety tracking
         self.last_soc_check = state_of_charge
         self.threshold_anxiety_rate = 2.0  # Minutes of penalty per 1% below threshold
-        
+
         # Log driver profile
         print(f"[Driver] Created: {self.anxiety_model.get_profile_description()}")
-    
-    # ... (keep all existing getter/setter methods the same) ...
     
     def get_source_node(self):
         return self.source_node
@@ -156,22 +152,37 @@ class EVDriver:
         """Set how much anxiety increases per percentage point below threshold"""
         self.threshold_anxiety_rate = rate
     
-    # Existing penalty tracking methods (keep unchanged)
+    # Existing penalty tracking methods 
     def add_queue_penalty(self, queue_time_minutes):
         self.current_penalties['queue_time'] += queue_time_minutes
         anxiety = self.get_current_anxiety()
         print(f"[Driver] Queue penalty: +{queue_time_minutes:.1f}min, Total penalties: {sum(self.current_penalties.values()):.1f}min, Anxiety: {anxiety:.3f}")
     
     def add_slow_charger_penalty(self, extra_charging_time_minutes):
-        self.current_penalties['slow_charger_time'] += extra_charging_time_minutes
+        # Add time-based penalty multiplier
+        if extra_charging_time_minutes < 15:        # Small delay
+            penalty_multiplier = 1.0
+        elif extra_charging_time_minutes < 30:      # Moderate delay
+            penalty_multiplier = 1.5
+        elif extra_charging_time_minutes < 60:      # Significant delay
+            penalty_multiplier = 2.0
+        elif extra_charging_time_minutes < 120:     # Long delay
+            penalty_multiplier = 2.5
+        else:                                       # Very long delay
+            penalty_multiplier = 3.0
+
+        # Apply multiplier and add to penalties
+        adjusted_penalty = extra_charging_time_minutes * penalty_multiplier
+        self.current_penalties['slow_charger_time'] += adjusted_penalty
+
         anxiety = self.get_current_anxiety()
-        print(f"[Driver] Slow charger penalty: +{extra_charging_time_minutes:.1f}min, Total penalties: {sum(self.current_penalties.values()):.1f}min, Anxiety: {anxiety:.3f}")
+        print(f"[Driver] Slow charger penalty: +{extra_charging_time_minutes:.1f}min x{penalty_multiplier:.1f} = {adjusted_penalty:.1f}min, Total penalties: {sum(self.current_penalties.values()):.1f}min, Anxiety: {anxiety:.3f}")
     
     def decay_penalties(self, decay_factor=0.95):
         """Gradually reduce penalties over time (except threshold penalty)"""
         old_total = sum(self.current_penalties.values())
         
-        # Decay everything except threshold penalty (which is position-based)
+        # Decay everything except threshold penalty
         for penalty_type in self.current_penalties:
             if penalty_type != 'threshold_penalty':
                 self.current_penalties[penalty_type] *= decay_factor
@@ -182,12 +193,6 @@ class EVDriver:
             anxiety = self.get_current_anxiety()
             print(f"[Driver] Penalties decayed: {old_total:.1f} -> {new_total:.1f}min, Anxiety: {anxiety:.3f}")
     
-    def reset_penalties(self):
-        """Reset all penalties (for testing)"""
-        self.current_penalties = {'queue_time': 0.0, 'slow_charger_time': 0.0, 'threshold_penalty': 0.0}
-        print(f"[Driver] Penalties reset, Anxiety: {self.get_current_anxiety():.3f}")
-    
-    # MODIFIED: Update existing methods to call threshold anxiety update
     def consume_battery(self, consumption):
         """Consume battery energy and update threshold anxiety"""
         old_soc = self.state_of_charge
@@ -197,35 +202,34 @@ class EVDriver:
         # Update threshold-based anxiety whenever SoC changes
         self.update_threshold_anxiety(charging_relief_factor=0.0)
     
-    def set_battery_level(self, new_soc):
-        """Set battery to a specific level and update threshold anxiety"""
-        old_soc = self.state_of_charge
+    # def set_battery_level(self, new_soc):
+    #     """Set battery to a specific level and update threshold anxiety"""
+    #     old_soc = self.state_of_charge
         
-        # Calculate charging relief BEFORE updating anything
-        relief_factor = 0.0
-        if new_soc > old_soc and abs(new_soc - old_soc) > 0.05:  # Charging occurred
-            charge_amount = new_soc - old_soc
-            relief_factor = min(0.75, charge_amount * 2.5)  # Cap at 75% relief
+    #     # Calculate charging relief BEFORE updating anything
+    #     relief_factor = 0.0
+    #     if new_soc > old_soc and abs(new_soc - old_soc) > 0.05:  # Charging occurred
+    #         charge_amount = new_soc - old_soc
+    #         relief_factor = min(0.75, charge_amount * 2.5)  # Cap at 75% relief
             
-            # Store current anxiety BEFORE any changes
-            old_total_anxiety = self.get_current_anxiety()
+    #         # Store current anxiety BEFORE any changes
+    #         old_total_anxiety = self.get_current_anxiety()
             
-            # Apply relief to accumulated penalties (queue and slow charger)
-            if relief_factor > 0.1:  # Only apply relief if >10%
-                self.current_penalties['queue_time'] *= (1.0 - relief_factor)
-                self.current_penalties['slow_charger_time'] *= (1.0 - relief_factor)
+    #         # Apply relief to accumulated penalties (queue and slow charger)
+    #         if relief_factor > 0.1:  # Only apply relief if >10%
+    #             self.current_penalties['queue_time'] *= (1.0 - relief_factor)
+    #             self.current_penalties['slow_charger_time'] *= (1.0 - relief_factor)
         
-        # NOW update SoC
-        self.state_of_charge = max(0.0, min(1.0, new_soc))
+    #     self.state_of_charge = max(0.0, min(1.0, new_soc))
         
-        # Update threshold-based anxiety with charging relief applied
-        if abs(new_soc - old_soc) > 0.05:  # 5% change
-            self.update_threshold_anxiety(charging_relief_factor=relief_factor)
+    #     # Update threshold-based anxiety with charging relief applied
+    #     if abs(new_soc - old_soc) > 0.05:  # 5% change
+    #         self.update_threshold_anxiety(charging_relief_factor=relief_factor)
             
-            # Log charging relief if it occurred
-            if new_soc > old_soc and relief_factor > 0.1:
-                new_total_anxiety = self.get_current_anxiety()
-                print(f"[Driver] Charging relief: +{charge_amount*100:.0f}% SoC, {relief_factor*100:.0f}% penalty reduction ({old_total_anxiety:.3f} -> {new_total_anxiety:.3f})")
+    #         # Log charging relief if it occurred
+    #         if new_soc > old_soc and relief_factor > 0.1:
+    #             new_total_anxiety = self.get_current_anxiety()
+    #             print(f"[Driver] Charging relief: +{charge_amount*100:.0f}% SoC, {relief_factor*100:.0f}% penalty reduction ({old_total_anxiety:.3f} -> {new_total_anxiety:.3f})")
     
     # Path traversal methods
     def find_shortest_path(self, graph):

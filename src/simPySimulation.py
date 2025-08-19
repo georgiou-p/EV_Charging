@@ -15,7 +15,7 @@ from charging_utils import charge_at_station_with_queue_tolerance, setup_chargin
 class SimpleEVSimulation:
     def __init__(self, graph, simulation_time=None):
         """
-        Simple SimPy simulation using SimPy's built-in queuing with connector compatibility
+        Simple SimPy simulation using SimPy's built-in queuing
         
         Args:
             graph: NetworkX graph with charging stations already assigned
@@ -39,13 +39,18 @@ class SimpleEVSimulation:
             'queue_times': [],
             'total_queue_time': 0,
             'queue_length': [],
-            'anxiety_levels': []  # Keep for compatibility but won't grow large
+            'anxiety_levels': []  
         }
         
-        # NEW: Efficient hourly anxiety tracking (T1-T24 mapped to indices 0-23)
+        # Hourly tracking (T1-T24 mapped to indices 0-23)
         self._anx_count = [0] * 24
         self._anx_mean = [0.0] * 24
         self._anx_M2 = [0.0] * 24
+        self._driver_count = [0] * 24
+        self._driver_count_samples = [0] * 24
+        self._queue_count = [0] * 24
+        self._queue_mean = [0.0] * 24
+        self._queue_M2 = [0.0] * 24
     
     def _hour_bin(self) -> int:
         """Convert env.now (minutes) to hour bin 0..23 (T1 maps to 0, T24 maps to 23)"""
@@ -61,7 +66,7 @@ class SimpleEVSimulation:
         self._anx_count[hour_idx] = n
     
     def _record_anxiety(self, driver):
-        """Record current anxiety level in hourly bins (O(1) operation)"""
+        """Record current anxiety level in hourly bins """
         anxiety = driver.get_current_anxiety()
         hour_idx = self._hour_bin()
         self._update_anxiety_stats(hour_idx, anxiety)
@@ -69,6 +74,31 @@ class SimpleEVSimulation:
         # Keep a few samples for compatibility, but limit growth
         if len(self.stats['anxiety_levels']) < 1000:  # Limit to prevent memory issues
             self.stats['anxiety_levels'].append(anxiety)
+    
+    def _record_driver_count(self):
+        """Record current number of active drivers in hourly bins"""
+        hour_idx = self._hour_bin()
+        # Count active drivers 
+        # Approximate based on cars spawned vs completed/stranded
+        active_drivers = self.stats['cars_spawned'] - self.stats['cars_completed'] - self.stats['cars_stranded']
+        # Update running average of driver count for this hour
+        self._driver_count_samples[hour_idx] += 1
+        n = self._driver_count_samples[hour_idx]
+        self._driver_count[hour_idx] += (active_drivers - self._driver_count[hour_idx]) / n
+
+    def _update_queue_stats(self, hour_idx: int, queue_time: float) -> None:
+        """Welford online algorithm update for queue time statistics per hour bin"""
+        n = self._queue_count[hour_idx] + 1
+        delta = queue_time - self._queue_mean[hour_idx]
+        self._queue_mean[hour_idx] += delta / n
+        delta2 = queue_time - self._queue_mean[hour_idx]
+        self._queue_M2[hour_idx] += delta * delta2
+        self._queue_count[hour_idx] = n
+
+    def _record_queue_time(self, queue_time_minutes):
+        """Record queue time in hourly bins"""
+        hour_idx = self._hour_bin()
+        self._update_queue_stats(hour_idx, queue_time_minutes)
     
     def _setup_charging_resources(self):
         """Setup SimPy resources for nodes that already have charging stations"""
@@ -90,11 +120,14 @@ class SimpleEVSimulation:
         # Record initial anxiety
         self._record_anxiety(driver)
         
+        # Record driver count (we just added a new active driver)
+        self._record_driver_count()
+        
         # Configuration - battery range in kilometers
         current_range_km = driver.get_range_remaining()
         print(f"[T={self.env.now:.1f}] Car {car_id}: Can travel {current_range_km:.2f}km out of {total_distance_km:.2f}km with current battery")
         
-        #--------------------MAIN JOURNEY LOOP----------
+        #--------------------MAIN JOURNEY LOOP-----------------------------------------------------------------------------------------------------------------------
         loop_counter = 0
         max_loops = len(path) * 2  # Safety limit to prevent infinite loops
         last_decay_time = self.env.now
@@ -118,7 +151,7 @@ class SimpleEVSimulation:
                     return
                 continue  # Restart loop after charging
             
-            # Check if driver is anxious about charging (50% SoC threshold)
+            # Check if driver is anxious about charging
             needs_charging, current_range, deficit, reason = driver.needs_charging_for_journey(self.graph)
             
             if needs_charging:
@@ -139,6 +172,10 @@ class SimpleEVSimulation:
             
             # Record anxiety after movement
             self._record_anxiety(driver)
+            
+            # Record driver count periodically to avoid overhead
+            if loop_counter % 5 == 0:  # Every 5th movement
+                self._record_driver_count()
             
             # Check if we've somehow run out of battery 
             if driver.is_battery_empty():
@@ -199,7 +236,7 @@ class SimpleEVSimulation:
 
         # Step 3: Try to charge with queue tolerance
         charging_success = yield from charge_at_station_with_queue_tolerance(
-            self.env, car_id, target_node, target_station_id, self.graph, self.stats, driver)
+            self.env, car_id, target_node, target_station_id, self.graph, self.stats, driver, self)
         
         # Record anxiety after charging completes
         self._record_anxiety(driver) 
@@ -208,8 +245,6 @@ class SimpleEVSimulation:
         if not charging_success:
             print(f"[T={self.env.now:.1f}] Car {car_id}: Charging failed at node {target_node}")
             print(f"[T={self.env.now:.1f}] Car {car_id}: No acceptable charging options found")
-            # Note: Enhanced fallback could search for other locations here
-
 
         # Step 5: Recalculate path from charging location to destination
         print(f"[T={self.env.now:.1f}] Car {car_id}: Charging complete, recalculating route from {target_node} to {destination_node}")
@@ -282,7 +317,7 @@ class SimpleEVSimulation:
 
         # Use the queue tolerance charging function
         charging_success = yield from charge_at_station_with_queue_tolerance(
-            self.env, car_id, current_node, best_station_id, self.graph, self.stats, driver)
+            self.env, car_id, current_node, best_station_id, self.graph, self.stats, driver, self)
 
         return charging_success
     
@@ -294,30 +329,30 @@ class SimpleEVSimulation:
         """
         # Hourly charging demand distribution (T1-T24)
         hourly_distribution = [
-            1.2,   # T1 (00:00-01:00)
-            1.1,   # T2 (01:00-02:00)
-            0.9,   # T3 (02:00-03:00)
-            0.7,   # T4 (03:00-04:00)
-            0.6,   # T5 (04:00-05:00)
-            0.7,   # T6 (05:00-06:00)
-            1.0,   # T7 (06:00-07:00)
-            1.5,   # T8 (07:00-08:00)
-            3.0,   # T9 (08:00-09:00)
-            5.0,   # T10 (09:00-10:00)
-            8.0,   # T11 (10:00-11:00)
-            11.5,  # T12 (11:00-12:00)
-            13.0,  # T13 (12:00-13:00) - Peak hour
-            9.5,   # T14 (13:00-14:00)
-            8.0,   # T15 (14:00-15:00)
-            7.0,   # T16 (15:00-16:00)
-            6.0,   # T17 (16:00-17:00)
-            5.0,   # T18 (17:00-18:00)
-            4.0,   # T19 (18:00-19:00)
-            3.5,   # T20 (19:00-20:00)
-            3.0,   # T21 (20:00-21:00)
-            2.4,   # T22 (21:00-22:00)
-            1.9,   # T23 (22:00-23:00)
-            1.5    # T24 (23:00-00:00)
+            0.5,  # T1  (00:00–01:00)
+            0.4,  # T2  (01:00–02:00)
+            0.3,  # T3  (02:00–03:00)
+            0.8,  # T4  (03:00–04:00)
+            8.0,  # T5  (04:00–05:00)  ← long-trip starts begin
+            17.5, # T6  (05:00–06:00)
+            20.0, # T7  (06:00–07:00)  ← peak
+            11.0, # T8  (07:00–08:00)
+            7.0,  # T9  (08:00–09:00)
+            5.0,  # T10 (09:00–10:00)
+            4.0,  # T11 (10:00–11:00)
+            3.0,  # T12 (11:00–12:00)
+            2.5,  # T13 (12:00–13:00)
+            2.5,  # T14 (13:00–14:00)
+            2.0,  # T15 (14:00–15:00)
+            2.0,  # T16 (15:00–16:00)
+            3.0,  # T17 (16:00–17:00)
+            4.0,  # T18 (17:00–18:00)
+            3.5,  # T19 (18:00–19:00)
+            1.5,  # T20 (19:00–20:00)
+            0.8,  # T21 (20:00–21:00)
+            0.4,  # T22 (21:00–22:00)
+            0.2,  # T23 (22:00–23:00)
+            0.1   # T24 (23:00–00:00)
         ]
         
         # Convert simulation hours to simulation time units (assuming 1 hour = 60 time units)
@@ -434,12 +469,17 @@ class SimpleEVSimulation:
         print(f"\n=== Car spawning complete: {car_id - 1} cars spawned over {simulation_duration_hours} hours ===")
     
     def _finalize_anxiety_stats(self):
-        """Compute final anxiety statistics and store in self.stats"""
+        """Compute final anxiety and queue statistics and store in self.stats"""
         anxiety_mean_T = []
         anxiety_std_T = []
         anxiety_count_T = self._anx_count[:]
-        
+
+        queue_mean_T = []
+        queue_std_T = []
+        queue_count_T = self._queue_count[:]
+
         for i in range(24):
+            # Anxiety stats (existing code)
             n = self._anx_count[i]
             if n >= 2:
                 mean = self._anx_mean[i]
@@ -450,30 +490,60 @@ class SimpleEVSimulation:
             else:  # n == 0
                 mean = 0.0
                 std = 0.0
-            
+
             anxiety_mean_T.append(mean)
             anxiety_std_T.append(std)
-        
+
+            # Queue stats (new code)
+            n_queue = self._queue_count[i]
+            if n_queue >= 2:
+                queue_mean = self._queue_mean[i]
+                queue_std = math.sqrt(self._queue_M2[i] / (n_queue - 1))
+            elif n_queue == 1:
+                queue_mean = self._queue_mean[i]
+                queue_std = 0.0
+            else:  # n_queue == 0
+                queue_mean = 0.0
+                queue_std = 0.0
+
+            queue_mean_T.append(queue_mean)
+            queue_std_T.append(queue_std)
+
         # Store in stats
         self.stats['anxiety_mean_T'] = anxiety_mean_T
         self.stats['anxiety_std_T'] = anxiety_std_T
         self.stats['anxiety_count_T'] = anxiety_count_T
-        
-        # Acceptance checks
+        self.stats['driver_count_T'] = self._driver_count[:]  # Average drivers per hour
+        self.stats['queue_mean_T'] = queue_mean_T
+        self.stats['queue_std_T'] = queue_std_T
+        self.stats['queue_count_T'] = queue_count_T
+
+        # Acceptance checks 
         assert len(self.stats['anxiety_mean_T']) == 24, f"Expected 24 mean values, got {len(self.stats['anxiety_mean_T'])}"
         assert len(self.stats['anxiety_std_T']) == 24, f"Expected 24 std values, got {len(self.stats['anxiety_std_T'])}"
-        
+        assert len(self.stats['queue_mean_T']) == 24, f"Expected 24 queue mean values, got {len(self.stats['queue_mean_T'])}"
+        assert len(self.stats['queue_std_T']) == 24, f"Expected 24 queue std values, got {len(self.stats['queue_std_T'])}"
+
         # Check value ranges
         for i, (mean, std) in enumerate(zip(anxiety_mean_T, anxiety_std_T)):
             assert 0.0 <= mean <= 1.0, f"Hour T{i+1}: mean {mean} out of range [0,1]"
             assert std >= 0.0, f"Hour T{i+1}: std {std} negative"
-        
+
+        # Check queue value ranges
+        for i, (queue_mean, queue_std) in enumerate(zip(queue_mean_T, queue_std_T)):
+            assert queue_mean >= 0.0, f"Hour T{i+1}: queue mean {queue_mean} negative"
+            assert queue_std >= 0.0, f"Hour T{i+1}: queue std {queue_std} negative"
+
         # Check we have some data
         total_samples = sum(anxiety_count_T)
         assert total_samples > 0, f"No anxiety samples collected: {anxiety_count_T}"
-        
+
         print(f"\nAnxiety statistics finalized: {total_samples} total samples across 24 hours")
         print(f"Hours with data: {sum(1 for c in anxiety_count_T if c > 0)}/24")
+
+        total_queue_samples = sum(queue_count_T)
+        print(f"Queue statistics finalized: {total_queue_samples} total queue events across 24 hours")
+        print(f"Hours with queue data: {sum(1 for c in queue_count_T if c > 0)}/24")
     
     def run_simulation(self):
         """Run the simulation"""
@@ -489,7 +559,7 @@ class SimpleEVSimulation:
             self.env.run(until=self.simulation_time)
         else:
             print(f"\n--- Running simulation until all cars complete their journeys ---")
-            self.env.run()  # Run until all processes finish
+            self.env.run(until=1440)  # Run until all processes finish
         
         # Finalize anxiety statistics
         self._finalize_anxiety_stats()
@@ -538,7 +608,7 @@ class SimpleEVSimulation:
             print(f"Legacy anxiety recordings: {len(self.stats['anxiety_levels'])} samples")
             print(f"Average anxiety (legacy): {sum(self.stats['anxiety_levels'])/len(self.stats['anxiety_levels']):.4f}")
         
-        # New hourly anxiety statistics
+        #Hourly anxiety statistics
         print(f"\nHourly Anxiety Statistics:")
         for i in range(24):
             hour_label = f"T{i+1}"
@@ -582,26 +652,45 @@ def main():
         
         try:
             from visualization import plot_anxiety_T_profile, print_anxiety_summary_table
+            from visualization import plot_queue_time_T_profile, print_queue_summary_table
             
+            # Get anxiety data
             mean_T = simulation.stats['anxiety_mean_T']
             std_T = simulation.stats['anxiety_std_T']
             count_T = simulation.stats['anxiety_count_T']
+            driver_count_T = simulation.stats.get('driver_count_T', None)
             
-            # Print detailed summary table
-            print_anxiety_summary_table(mean_T, std_T, count_T)
+            # Get queue data
+            queue_mean_T = simulation.stats.get('queue_mean_T', [0] * 24)
+            queue_std_T = simulation.stats.get('queue_std_T', [0] * 24)
+            queue_count_T = simulation.stats.get('queue_count_T', [0] * 24)
             
-            # Create the shaded line plot
-            print("\nGenerating anxiety profile plot...")
-            plot_anxiety_T_profile(mean_T, std_T)
+            # Print detailed summary tables
+            #print_anxiety_summary_table(mean_T, std_T, count_T, driver_count_T)
+            #print_queue_summary_table(queue_mean_T, queue_std_T, queue_count_T, driver_count_T)
             
-            print("Anxiety visualization complete!")
+            # Create the anxiety plot with driver count
+            print("\nGenerating anxiety profile plot with active driver count...")
+            plot_anxiety_T_profile(mean_T, std_T, driver_count_T, 
+                                 title="EV Driver Anxiety Throughout the Day (Public Charging)")
+            
+            # Create the queue time plot with driver count
+            print("\nGenerating queue time profile plot with active driver count...")
+            plot_queue_time_T_profile(queue_mean_T, queue_std_T, driver_count_T,
+                                    title="EV Charging Queue Times Throughout the Day")
+            
+            print("All visualizations complete!")
             
         except ImportError as e:
             print(f"Could not import visualization functions: {e}")
-            print("Anxiety data is available in simulation.stats for manual plotting:")
+            print("Data is available in simulation.stats for manual plotting:")
             print(f"  anxiety_mean_T: {len(simulation.stats['anxiety_mean_T'])} values")
             print(f"  anxiety_std_T: {len(simulation.stats['anxiety_std_T'])} values")
             print(f"  anxiety_count_T: {len(simulation.stats['anxiety_count_T'])} values")
+            print(f"  queue_mean_T: {len(simulation.stats.get('queue_mean_T', []))} values")
+            print(f"  queue_std_T: {len(simulation.stats.get('queue_std_T', []))} values")
+            print(f"  queue_count_T: {len(simulation.stats.get('queue_count_T', []))} values")
+            print(f"  driver_count_T: {len(simulation.stats.get('driver_count_T', []))} values")
         except Exception as e:
             print(f"Error creating visualization: {e}")
             import traceback

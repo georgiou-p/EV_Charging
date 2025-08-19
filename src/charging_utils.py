@@ -1,3 +1,4 @@
+import random
 """
 Simplified charging utilities for EV simulation
 Implements the new simplified charging logic without redundant functions
@@ -77,7 +78,7 @@ def calculate_charging_time(current_soc, target_soc, battery_capacity_kwh, charg
     
     return time_hours
 
-def charge_at_station_with_queue_tolerance(env, car_id, target_node, target_station_id, graph, stats, driver, target_soc=0.8):
+def charge_at_station_with_queue_tolerance(env, car_id, target_node, target_station_id, graph, stats, driver, simulation =None, target_soc=0.8):
     """
     Try to charge at specific station (chosen based on predictions). 
     Re-evaluate with REAL conditions upon arrival.
@@ -170,7 +171,7 @@ def charge_at_station_with_queue_tolerance(env, car_id, target_node, target_stat
                     print(f"[T={env.now:.1f}] Car {car_id}: Alternative {station.get_station_id()}: {real_queue_len} cars, {real_wait_time} min, {max_power}kW, score={score}")
         
         if alternative_options:
-            # Instead of picking best score, use weighted random selection
+            # Use weighted random selection
             stations_for_random = [opt[0] for opt in alternative_options]  # Get station objects
             weights = [opt[1] for opt in alternative_options]  # Get scores as weights
     
@@ -178,7 +179,7 @@ def charge_at_station_with_queue_tolerance(env, car_id, target_node, target_stat
             total_weight = sum(weights)
             probabilities = [w/total_weight for w in weights]
 
-            import random
+            
             chosen_station = random.choices(stations_for_random, weights=probabilities)[0]
 
             # Find the matching option for logging
@@ -187,7 +188,7 @@ def charge_at_station_with_queue_tolerance(env, car_id, target_node, target_stat
             
             print(f"[T={env.now:.1f}] Car {car_id}: RANDOMLY selected {chosen_station.get_station_id()} (weighted by score {best_score:.0f}): {queue_len} cars ({wait_time} min wait, {max_power}kW)")
         else:
-            # FALLBACK: No acceptable alternatives, find station with smallest wait time (including target)
+            #No acceptable alternatives, find station with smallest wait time (including target)
             print(f"[T={env.now:.1f}] Car {car_id}: No acceptable alternatives at node {target_node}")
             print(f"[T={env.now:.1f}] Car {car_id}: FALLBACK - selecting station with smallest wait time regardless of tolerance")
             
@@ -250,9 +251,13 @@ def charge_at_station_with_queue_tolerance(env, car_id, target_node, target_stat
         current_queue_length = len(chosen_station.simpy_resource.queue)
         queue_time = queue_end_time - queue_start_time
         if queue_time > 0:
-            driver.add_queue_penalty(queue_time)
+            #Queue penalty
+            driver.add_queue_penalty(queue_time * 2)
             stats['queue_times'].append(queue_time)
             stats['total_queue_time'] += queue_time
+
+            if simulation is not None:
+                simulation._record_queue_time(queue_time)
                     
         # Start charging
         current_soc = driver.get_state_of_charge()
@@ -265,6 +270,18 @@ def charge_at_station_with_queue_tolerance(env, car_id, target_node, target_stat
         else:
             charging_time = calculate_charging_time(current_soc, target_soc, battery_capacity_kwh or 75.0, 50)
         
+        expected_fast_power = 50.0  # kW - what we consider "normal" charging speed
+
+        if charging_power < expected_fast_power:
+            expected_time = calculate_charging_time(current_soc, target_soc, battery_capacity_kwh, expected_fast_power)
+            actual_time = charging_time
+            extra_time_hours = actual_time - expected_time
+    
+            if extra_time_hours > 0:
+                extra_time_minutes = extra_time_hours * 60  # Convert to minutes
+                driver.add_slow_charger_penalty(extra_time_minutes)
+                print(f"[T={env.now:.1f}] Car {car_id}: Slow charger penalty: {extra_time_minutes:.1f} extra minutes for {charging_power}kW vs {expected_fast_power}kW")
+              
         if charging_time > 0:
             print(f"[T={env.now:.1f}] Car {car_id}: Charging for {charging_time:.1f} time units at {charging_power}kW "
                   f"(from {current_soc*100:.0f}% to {target_soc*100:.0f}%)")
@@ -278,7 +295,6 @@ def charge_at_station_with_queue_tolerance(env, car_id, target_node, target_stat
         
         stats['total_charging_events'] += 1
         
-        # Resource is automatically released when exiting the 'with' block
     
     return True
 
