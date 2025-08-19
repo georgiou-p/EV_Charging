@@ -2,6 +2,7 @@ import simpy
 import random
 import cProfile
 import networkx as nx
+import math
 from station_assignment import assign_charging_stations_to_nodes
 from evDriver import EVDriver
 from pathfinding import (
@@ -38,12 +39,36 @@ class SimpleEVSimulation:
             'queue_times': [],
             'total_queue_time': 0,
             'queue_length': [],
-            'anxiety_levels': []
+            'anxiety_levels': []  # Keep for compatibility but won't grow large
         }
+        
+        # NEW: Efficient hourly anxiety tracking (T1-T24 mapped to indices 0-23)
+        self._anx_count = [0] * 24
+        self._anx_mean = [0.0] * 24
+        self._anx_M2 = [0.0] * 24
+    
+    def _hour_bin(self) -> int:
+        """Convert env.now (minutes) to hour bin 0..23 (T1 maps to 0, T24 maps to 23)"""
+        return int(self.env.now // 60) % 24
+    
+    def _update_anxiety_stats(self, hour_idx: int, value: float) -> None:
+        """Welford online algorithm update for anxiety statistics per hour bin"""
+        n = self._anx_count[hour_idx] + 1
+        delta = value - self._anx_mean[hour_idx]
+        self._anx_mean[hour_idx] += delta / n
+        delta2 = value - self._anx_mean[hour_idx]
+        self._anx_M2[hour_idx] += delta * delta2
+        self._anx_count[hour_idx] = n
+    
     def _record_anxiety(self, driver):
-        """Record current anxiety level"""
+        """Record current anxiety level in hourly bins (O(1) operation)"""
         anxiety = driver.get_current_anxiety()
-        self.stats['anxiety_levels'].append(anxiety)
+        hour_idx = self._hour_bin()
+        self._update_anxiety_stats(hour_idx, anxiety)
+        
+        # Keep a few samples for compatibility, but limit growth
+        if len(self.stats['anxiety_levels']) < 1000:  # Limit to prevent memory issues
+            self.stats['anxiety_levels'].append(anxiety)
     
     def _setup_charging_resources(self):
         """Setup SimPy resources for nodes that already have charging stations"""
@@ -62,6 +87,7 @@ class SimpleEVSimulation:
         driver = EVDriver(source_node, destination_node, initial_soc, connector_type, battery_capacity_km)
         driver.set_current_path(path)
 
+        # Record initial anxiety
         self._record_anxiety(driver)
         
         # Configuration - battery range in kilometers
@@ -110,6 +136,9 @@ class SimpleEVSimulation:
             
             # Travel to next node
             yield from travel_to_next_node(self.env, car_id, driver, self.graph, travel_time_per_km=0.75)
+            
+            # Record anxiety after movement
+            self._record_anxiety(driver)
             
             # Check if we've somehow run out of battery 
             if driver.is_battery_empty():
@@ -171,6 +200,8 @@ class SimpleEVSimulation:
         # Step 3: Try to charge with queue tolerance
         charging_success = yield from charge_at_station_with_queue_tolerance(
             self.env, car_id, target_node, target_station_id, self.graph, self.stats, driver)
+        
+        # Record anxiety after charging completes
         self._record_anxiety(driver) 
 
         # Step 4: Handle charging failure
@@ -257,59 +288,200 @@ class SimpleEVSimulation:
     
     
     
-    def spawn_multiple_cars(self, total_cars, spawn_duration_hours=24):
+    def spawn_multiple_cars(self, total_cars, simulation_duration_hours=24):
         """
-        Spawn cars gradually over a time period (default 24 hours)
+        Spawn cars gradually over a time period according to hourly distribution
         """
-        spawn_duration_minutes = spawn_duration_hours * 60
-        interval = spawn_duration_minutes / total_cars
+        # Hourly charging demand distribution (T1-T24)
+        hourly_distribution = [
+            1.2,   # T1 (00:00-01:00)
+            1.1,   # T2 (01:00-02:00)
+            0.9,   # T3 (02:00-03:00)
+            0.7,   # T4 (03:00-04:00)
+            0.6,   # T5 (04:00-05:00)
+            0.7,   # T6 (05:00-06:00)
+            1.0,   # T7 (06:00-07:00)
+            1.5,   # T8 (07:00-08:00)
+            3.0,   # T9 (08:00-09:00)
+            5.0,   # T10 (09:00-10:00)
+            8.0,   # T11 (10:00-11:00)
+            11.5,  # T12 (11:00-12:00)
+            13.0,  # T13 (12:00-13:00) - Peak hour
+            9.5,   # T14 (13:00-14:00)
+            8.0,   # T15 (14:00-15:00)
+            7.0,   # T16 (15:00-16:00)
+            6.0,   # T17 (16:00-17:00)
+            5.0,   # T18 (17:00-18:00)
+            4.0,   # T19 (18:00-19:00)
+            3.5,   # T20 (19:00-20:00)
+            3.0,   # T21 (20:00-21:00)
+            2.4,   # T22 (21:00-22:00)
+            1.9,   # T23 (22:00-23:00)
+            1.5    # T24 (23:00-00:00)
+        ]
+        
+        # Convert simulation hours to simulation time units (assuming 1 hour = 60 time units)
+        time_units_per_hour = 60
+        simulation_duration_units = simulation_duration_hours * time_units_per_hour
+        
         all_nodes = list(self.graph.nodes)
         battery_capacity_km = 300
-
+        
+        # Connector type distribution
         connector_types = [1, 2, 3]
         connector_weights = [0.2, 0.7, 0.1]
-
-        for car_id in range(1, total_cars + 1):
-            # Wait before spawning next car
-            if car_id > 1:
-                yield self.env.timeout(interval)
-
-          
-            while True:  # Keep trying until we find a valid route
-                source = random.choice(all_nodes)
-                destination = random.choice(all_nodes)
-
-                if source != destination:
-                    try:
-                        path = nx.shortest_path(self.graph, source, destination, weight='weight')
-                        if path:
-                            # Calculate total distance
-                            total_distance_km = 0
-                            for i in range(len(path) - 1):
-                                node1, node2 = path[i], path[i + 1]  
-                                if self.graph.has_edge(node1, node2):
-                                    total_distance_km += self.graph.edges[node1, node2]['weight']
-
-                            if 100 <= total_distance_km <= 500:
-                                break  # Valid route found, exit the while loop
-                    except nx.NetworkXNoPath:
-                        continue  # No path found, try again
-                        
-            initial_soc = random.uniform(0.6, 0.9)
-            connector_type = random.choices(connector_types, weights=connector_weights)[0]
-
-            print(f"[T={self.env.now:.1f}] Spawning car {car_id} from {source} to {destination}")
-
-            self.env.process(self.car_process(car_id, path, initial_soc, connector_type, total_distance_km, battery_capacity_km))
-            self.stats['cars_spawned'] += 1
+        
+        print(f"=== Spawning {total_cars} cars over {simulation_duration_hours} hours ===")
+        
+        car_id = 1
+        
+        # Process each hour
+        for hour_index, percentage in enumerate(hourly_distribution):
+            hour_number = hour_index + 1
+            
+            # Calculate how many cars to spawn in this hour
+            cars_this_hour = int(total_cars * percentage / 100)
+            
+            # Handle rounding by distributing remaining cars to peak hours
+            if car_id + cars_this_hour - 1 > total_cars:
+                cars_this_hour = total_cars - car_id + 1
+            
+            if cars_this_hour <= 0:
+                continue
+            
+            print(f"\n[T={self.env.now:.1f}] Starting hour T{hour_number} - spawning {cars_this_hour} cars over next hour")
+            
+            # Calculate spawn intervals within this hour
+            if cars_this_hour == 1:
+                # Single car - spawn at random time within the hour
+                spawn_times = [random.uniform(0, time_units_per_hour)]
+            else:
+                # Multiple cars - distribute evenly with some randomization
+                base_interval = time_units_per_hour / cars_this_hour
+                spawn_times = []
+                
+                for i in range(cars_this_hour):
+                    # Base time + small random offset to avoid exact simultaneity
+                    base_time = i * base_interval
+                    random_offset = random.uniform(-base_interval * 0.3, base_interval * 0.3)
+                    spawn_time = max(0, min(time_units_per_hour - 1, base_time + random_offset))
+                    spawn_times.append(spawn_time)
+                
+                # Sort spawn times to ensure chronological order
+                spawn_times.sort()
+            
+            # Spawn cars at calculated times within this hour
+            for i, spawn_offset in enumerate(spawn_times):
+                if car_id > total_cars:
+                    break
+                
+                # Wait until the spawn time for this car
+                if i == 0:
+                    # First car in this hour - wait from start of hour
+                    yield self.env.timeout(spawn_offset)
+                else:
+                    # Subsequent cars - wait for the interval between this and previous car
+                    interval = spawn_offset - spawn_times[i-1]
+                    if interval > 0:
+                        yield self.env.timeout(interval)
+                
+                # Generate car parameters
+                while True:  # Keep trying until we find a valid route
+                    source = random.choice(all_nodes)
+                    destination = random.choice(all_nodes)
+                    
+                    if source != destination:
+                        try:
+                            path = nx.shortest_path(self.graph, source, destination, weight='weight')
+                            if path:
+                                # Calculate total distance
+                                total_distance_km = 0
+                                for j in range(len(path) - 1):
+                                    node1, node2 = path[j], path[j + 1]
+                                    if self.graph.has_edge(node1, node2):
+                                        total_distance_km += self.graph.edges[node1, node2]['weight']
+                                
+                                if 100 <= total_distance_km <= 500:
+                                    break  # Valid route found
+                        except nx.NetworkXNoPath:
+                            continue  # No path found, try again
+                
+                # Generate car characteristics
+                initial_soc = random.uniform(0.6, 0.9)
+                connector_type = random.choices(connector_types, weights=connector_weights)[0]
+                
+                # Calculate current hour and minute for logging
+                current_sim_time = self.env.now
+                current_hour = int(current_sim_time // time_units_per_hour) + 1
+                current_minute = int((current_sim_time % time_units_per_hour))
+                
+                print(f"[T={self.env.now:.1f}] (Hour T{current_hour}, +{current_minute}min) "
+                      f"Spawning car {car_id} from {source} to {destination} "
+                      f"({total_distance_km:.0f}km, SoC: {initial_soc:.2f}, connector: {connector_type})")
+                
+                # Start the car process
+                self.env.process(self.car_process(car_id, path, initial_soc, connector_type, total_distance_km, battery_capacity_km))
+                self.stats['cars_spawned'] += 1
+                
+                car_id += 1
+            
+            # Wait for any remaining time in this hour before moving to next hour
+            time_spent_this_hour = spawn_times[-1] if spawn_times else 0
+            remaining_time = time_units_per_hour - time_spent_this_hour
+            if remaining_time > 0:
+                yield self.env.timeout(remaining_time)
+        
+        print(f"\n=== Car spawning complete: {car_id - 1} cars spawned over {simulation_duration_hours} hours ===")
+    
+    def _finalize_anxiety_stats(self):
+        """Compute final anxiety statistics and store in self.stats"""
+        anxiety_mean_T = []
+        anxiety_std_T = []
+        anxiety_count_T = self._anx_count[:]
+        
+        for i in range(24):
+            n = self._anx_count[i]
+            if n >= 2:
+                mean = self._anx_mean[i]
+                std = math.sqrt(self._anx_M2[i] / (n - 1))
+            elif n == 1:
+                mean = self._anx_mean[i]
+                std = 0.0
+            else:  # n == 0
+                mean = 0.0
+                std = 0.0
+            
+            anxiety_mean_T.append(mean)
+            anxiety_std_T.append(std)
+        
+        # Store in stats
+        self.stats['anxiety_mean_T'] = anxiety_mean_T
+        self.stats['anxiety_std_T'] = anxiety_std_T
+        self.stats['anxiety_count_T'] = anxiety_count_T
+        
+        # Acceptance checks
+        assert len(self.stats['anxiety_mean_T']) == 24, f"Expected 24 mean values, got {len(self.stats['anxiety_mean_T'])}"
+        assert len(self.stats['anxiety_std_T']) == 24, f"Expected 24 std values, got {len(self.stats['anxiety_std_T'])}"
+        
+        # Check value ranges
+        for i, (mean, std) in enumerate(zip(anxiety_mean_T, anxiety_std_T)):
+            assert 0.0 <= mean <= 1.0, f"Hour T{i+1}: mean {mean} out of range [0,1]"
+            assert std >= 0.0, f"Hour T{i+1}: std {std} negative"
+        
+        # Check we have some data
+        total_samples = sum(anxiety_count_T)
+        assert total_samples > 0, f"No anxiety samples collected: {anxiety_count_T}"
+        
+        print(f"\nAnxiety statistics finalized: {total_samples} total samples across 24 hours")
+        print(f"Hours with data: {sum(1 for c in anxiety_count_T if c > 0)}/24")
     
     def run_simulation(self):
         """Run the simulation"""
         print("=== Starting EV Simulation===")
         print(f"Graph has {len(self.graph.nodes)} nodes")
         
-        # Spawn cars
-        self.env.process(self.spawn_multiple_cars(total_cars=10000, spawn_duration_hours=24))  # NUMBER OF CARSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS
+        # Spawn cars with hourly demand distribution
+        self.env.process(self.spawn_multiple_cars(total_cars=10000, simulation_duration_hours=24))
         
         # Run simulation
         if self.simulation_time:
@@ -318,6 +490,9 @@ class SimpleEVSimulation:
         else:
             print(f"\n--- Running simulation until all cars complete their journeys ---")
             self.env.run()  # Run until all processes finish
+        
+        # Finalize anxiety statistics
+        self._finalize_anxiety_stats()
         
         # Print final statistics
         print("\n=== Simulation Complete ===")
@@ -357,26 +532,23 @@ class SimpleEVSimulation:
 
         if self.stats['cars_completed'] == 0 and self.stats['cars_spawned'] > 0:
             print("No cars completed their journey - they may be stranded or need more time!")
-            # Calculate success rate
-            if self.stats['cars_spawned'] > 0:
-                success_rate = (self.stats['cars_completed'] / self.stats['cars_spawned']) * 100
-                print(f"Journey completion rate: {success_rate:.1f}%")
-
-                if self.stats['connector_incompatibility_failures'] > 0:
-                    incompatibility_rate = (self.stats['connector_incompatibility_failures'] / self.stats['cars_spawned']) * 100
-                    print(f"Connector incompatibility rate: {incompatibility_rate:.1f}%")
-
-            if self.stats['cars_completed'] == 0 and self.stats['cars_spawned'] > 0:
-                    print("No cars completed their journey - they may be stranded or need more time!")
 
         # Simple anxiety statistics
         if self.stats['anxiety_levels']:
-            print(f"Average anxiety: {sum(self.stats['anxiety_levels'])/len(self.stats['anxiety_levels']):.4f}")
-            print(f"Maximum anxiety: {max(self.stats['anxiety_levels']):.4f}")
-            print(f"Minimum anxiety: {min(self.stats['anxiety_levels']):.4f}")
-        else:
-         print("No anxiety data collected")
-
+            print(f"Legacy anxiety recordings: {len(self.stats['anxiety_levels'])} samples")
+            print(f"Average anxiety (legacy): {sum(self.stats['anxiety_levels'])/len(self.stats['anxiety_levels']):.4f}")
+        
+        # New hourly anxiety statistics
+        print(f"\nHourly Anxiety Statistics:")
+        for i in range(24):
+            hour_label = f"T{i+1}"
+            count = self.stats['anxiety_count_T'][i]
+            mean = self.stats['anxiety_mean_T'][i]
+            std = self.stats['anxiety_std_T'][i]
+            if count > 0:
+                print(f"  {hour_label}: {count:4d} samples, mean={mean:.4f}, std={std:.4f}")
+            else:
+                print(f"  {hour_label}: {count:4d} samples, no data")
 
 
 def main():
@@ -399,29 +571,41 @@ def main():
         
         print(f"Graph loaded successfully with {len(graph.nodes)} nodes")
         
-        # Analyze connector type distribution in charging stations
-        connector_stats = {}
-        total_stations = 0
-        for node in graph.nodes:
-            stations = graph.nodes[node]['charging_stations']
-            for station in stations:
-                total_stations += 1
-                for connection in station.get_connections():
-                    conn_type = connection.connection_type_id
-                    if conn_type == 0:
-                        conn_type = "Universal"
-                    connector_stats[conn_type] = connector_stats.get(conn_type, 0) + 1
-        
-        print("\nCharging station connector distribution:")
-        # Sort with custom key to handle mixed int/string types
-        sorted_items = sorted(connector_stats.items(), key=lambda x: (isinstance(x[0], str), x[0]))
-        for conn_type, count in sorted_items:
-            percentage = (count / sum(connector_stats.values())) * 100
-            print(f"  Connector type {conn_type}: {count} connections ({percentage:.1f}%)")
-        
         # Create and run simulation
         simulation = SimpleEVSimulation(graph, simulation_time=None)  # No time limit
         simulation.run_simulation()
+        
+        # Plot anxiety profile
+        print("\n" + "="*60)
+        print("CREATING ANXIETY VISUALIZATION")
+        print("="*60)
+        
+        try:
+            from visualization import plot_anxiety_T_profile, print_anxiety_summary_table
+            
+            mean_T = simulation.stats['anxiety_mean_T']
+            std_T = simulation.stats['anxiety_std_T']
+            count_T = simulation.stats['anxiety_count_T']
+            
+            # Print detailed summary table
+            print_anxiety_summary_table(mean_T, std_T, count_T)
+            
+            # Create the shaded line plot
+            print("\nGenerating anxiety profile plot...")
+            plot_anxiety_T_profile(mean_T, std_T)
+            
+            print("Anxiety visualization complete!")
+            
+        except ImportError as e:
+            print(f"Could not import visualization functions: {e}")
+            print("Anxiety data is available in simulation.stats for manual plotting:")
+            print(f"  anxiety_mean_T: {len(simulation.stats['anxiety_mean_T'])} values")
+            print(f"  anxiety_std_T: {len(simulation.stats['anxiety_std_T'])} values")
+            print(f"  anxiety_count_T: {len(simulation.stats['anxiety_count_T'])} values")
+        except Exception as e:
+            print(f"Error creating visualization: {e}")
+            import traceback
+            traceback.print_exc()
         
     except Exception as e:
         print(f"Error: {e}")

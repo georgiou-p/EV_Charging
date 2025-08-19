@@ -321,7 +321,7 @@ def travel_to_next_node(env, car_id, driver, graph, travel_time_per_km=0.75):
     driver.consume_battery(battery_consumption)
     
     print(f"[T={env.now:.1f}] Car {car_id}: Moved to node {next_node} (traveled {distance_km:.2f}km), SoC: {driver.get_state_of_charge():.2f} ({driver.battery_percentage:.0f}%)")
-
+    
 
 # def find_nearest_nodes_with_stations(graph, current_node, max_distance=50, connector_type=None): 
 #     """

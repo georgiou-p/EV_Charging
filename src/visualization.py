@@ -352,3 +352,164 @@ def print_assignment_summary(graph):
         print(f"Median distance: {np.median(weights):.2f}km")
         
     print("="*50)
+
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+def plot_anxiety_T_profile(mean_T, std_T, title="EV Driver Anxiety Throughout the Day (Public Charging)"):
+    """
+    Plot shaded line graph of driver anxiety throughout the day (T1-T24)
+    
+    Args:
+        mean_T: List of 24 mean anxiety values (one per hour T1-T24)
+        std_T: List of 24 standard deviation values (one per hour T1-T24)
+        title: Plot title
+    """
+    # Validate input
+    assert len(mean_T) == 24, f"Expected 24 mean values, got {len(mean_T)}"
+    assert len(std_T) == 24, f"Expected 24 std values, got {len(std_T)}"
+    
+    # Convert to numpy arrays for easier manipulation
+    mean_T = np.array(mean_T)
+    std_T = np.array(std_T)
+    
+    # Create x-axis values (T1 to T24)
+    x = np.arange(1, 25)  # 1, 2, 3, ..., 24
+    
+    # Calculate confidence bands (mean ± 1σ), clipped to [0, 1]
+    upper_band = np.clip(mean_T + std_T, 0, 1)
+    lower_band = np.clip(mean_T - std_T, 0, 1)
+    
+    # Create the plot
+    fig, ax = plt.subplots(figsize=(14, 8))
+    
+    # Plot the shaded confidence band first (so it appears behind the line)
+    ax.fill_between(x, lower_band, upper_band, 
+                   alpha=0.3, color='lightcoral', 
+                   label='±1σ confidence band')
+    
+    # Plot the mean line
+    ax.plot(x, mean_T, 
+           color='darkred', linewidth=2.5, 
+           marker='o', markersize=4,
+           label='Mean anxiety')
+    
+    # Customize the plot
+    ax.set_xlabel('Time of Day (T1–T24)', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Driver Anxiety (0–1)', fontsize=12, fontweight='bold')
+    ax.set_title(title, fontsize=14, fontweight='bold', pad=20)
+    
+    # Set x-axis ticks and labels
+    ax.set_xticks(x)
+    ax.set_xticklabels([f'T{i}' for i in x], rotation=45, ha='right')
+    
+    # Set y-axis limits and add horizontal reference lines
+    ax.set_ylim(0, 1)
+    ax.axhline(y=0.5, color='gray', linestyle='--', alpha=0.5, linewidth=1)
+    ax.axhline(y=0.25, color='gray', linestyle=':', alpha=0.3, linewidth=1)
+    ax.axhline(y=0.75, color='gray', linestyle=':', alpha=0.3, linewidth=1)
+    
+    # Add grid for better readability
+    ax.grid(True, alpha=0.3, linestyle='-', linewidth=0.5)
+    
+    # Add legend
+    ax.legend(loc='upper right', fontsize=11, framealpha=0.9)
+    
+    # Add annotations for peak and low periods
+    if len(mean_T) > 0:
+        # Find peak anxiety hour
+        peak_hour = np.argmax(mean_T) + 1  # +1 because x starts at 1
+        peak_value = mean_T[peak_hour - 1]
+        
+        # Find lowest anxiety hour (excluding zeros)
+        non_zero_indices = mean_T > 0
+        if np.any(non_zero_indices):
+            low_hour = np.argmin(np.where(non_zero_indices, mean_T, np.inf)) + 1
+            low_value = mean_T[low_hour - 1]
+            
+            # Add annotations
+            if peak_value > 0:
+                ax.annotate(f'Peak: T{peak_hour}\n({peak_value:.3f})',
+                           xy=(peak_hour, peak_value),
+                           xytext=(peak_hour + 2, peak_value + 0.1),
+                           arrowprops=dict(arrowstyle='->', color='darkred', alpha=0.7),
+                           fontsize=10, ha='left',
+                           bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
+            
+            if low_value > 0 and low_hour != peak_hour:
+                ax.annotate(f'Low: T{low_hour}\n({low_value:.3f})',
+                           xy=(low_hour, low_value),
+                           xytext=(low_hour - 2, low_value + 0.1),
+                           arrowprops=dict(arrowstyle='->', color='darkblue', alpha=0.7),
+                           fontsize=10, ha='right',
+                           bbox=dict(boxstyle="round,pad=0.3", facecolor="lightblue", alpha=0.8))
+    
+    # Add time period labels on x-axis
+    time_labels = ['00:00', '01:00', '02:00', '03:00', '04:00', '05:00',
+                   '06:00', '07:00', '08:00', '09:00', '10:00', '11:00',
+                   '12:00', '13:00', '14:00', '15:00', '16:00', '17:00',
+                   '18:00', '19:00', '20:00', '21:00', '22:00', '23:00']
+    
+    # Add secondary x-axis with hour labels
+    ax2 = ax.twiny()
+    ax2.set_xlim(ax.get_xlim())
+    ax2.set_xticks(x[::3])  # Every 3 hours
+    ax2.set_xticklabels([time_labels[i-1] for i in x[::3]], fontsize=9, alpha=0.7)
+    ax2.set_xlabel('Hour of Day', fontsize=10, alpha=0.7)
+    
+    # Adjust layout to prevent label cutoff
+    plt.tight_layout()
+    
+    # Print some statistics
+    total_samples = np.sum([1 for m in mean_T if m > 0])  # Count non-zero hours
+    print(f"\nAnxiety Profile Statistics:")
+    print(f"Hours with data: {total_samples}/24")
+    if total_samples > 0:
+        non_zero_mean = mean_T[mean_T > 0]
+        print(f"Overall average anxiety: {np.mean(non_zero_mean):.4f}")
+        print(f"Peak anxiety: {np.max(mean_T):.4f} at T{np.argmax(mean_T) + 1}")
+        if np.any(mean_T > 0):
+            min_non_zero = np.min(mean_T[mean_T > 0])
+            min_hour = np.argmin(np.where(mean_T > 0, mean_T, np.inf)) + 1
+            print(f"Lowest anxiety: {min_non_zero:.4f} at T{min_hour}")
+    
+    # Show the plot
+    plt.show()
+    
+    return fig, ax
+
+
+def print_anxiety_summary_table(mean_T, std_T, count_T):
+    """
+    Print a formatted table of anxiety statistics by hour
+    
+    Args:
+        mean_T: List of 24 mean anxiety values
+        std_T: List of 24 standard deviation values  
+        count_T: List of 24 sample counts
+    """
+    print(f"\n{'=' * 70}")
+    print(f"{'HOURLY ANXIETY SUMMARY TABLE':^70}")
+    print(f"{'=' * 70}")
+    print(f"{'Hour':<6} {'Time':<12} {'Samples':<8} {'Mean':<10} {'Std Dev':<10} {'Range':<12}")
+    print(f"{'-' * 70}")
+    
+    for i in range(24):
+        hour_label = f"T{i+1}"
+        time_range = f"{i:02d}:00-{(i+1)%24:02d}:00"
+        samples = count_T[i]
+        mean = mean_T[i]
+        std = std_T[i]
+        
+        if samples > 0:
+            range_str = f"[{max(0, mean-std):.3f}, {min(1, mean+std):.3f}]"
+            print(f"{hour_label:<6} {time_range:<12} {samples:<8} {mean:<10.4f} {std:<10.4f} {range_str:<12}")
+        else:
+            print(f"{hour_label:<6} {time_range:<12} {samples:<8} {'N/A':<10} {'N/A':<10} {'N/A':<12}")
+    
+    print(f"{'-' * 70}")
+    total_samples = sum(count_T)
+    hours_with_data = sum(1 for c in count_T if c > 0)
+    print(f"Total samples: {total_samples}, Hours with data: {hours_with_data}/24")
+    print(f"{'=' * 70}")
