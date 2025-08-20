@@ -551,7 +551,7 @@ class SimpleEVSimulation:
         print(f"Graph has {len(self.graph.nodes)} nodes")
         
         # Spawn cars with hourly demand distribution
-        self.env.process(self.spawn_multiple_cars(total_cars=10000, simulation_duration_hours=24))
+        self.env.process(self.spawn_multiple_cars(total_cars=1000, simulation_duration_hours=24)) #CARSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS
         
         # Run simulation
         if self.simulation_time:

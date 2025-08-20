@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Standalone test script for the anxiety recording system
 This version doesn't import external modules - tests core algorithms only
@@ -41,7 +40,7 @@ def test_welford_algorithm():
     
     assert abs(expected_mean - welford_mean) < 1e-10, "Mean calculation error"
     assert abs(expected_std - welford_std) < 1e-10, "Std calculation error"
-    print("✓ Welford algorithm working correctly\n")
+    print(" Welford algorithm working correctly\n")
 
 
 def test_hour_binning():
@@ -74,7 +73,7 @@ def test_hour_binning():
         print(f"  {sim_time:4d} min -> bin {actual_bin:2d} -> {t_label}")
         assert actual_bin == expected_bin, f"Expected bin {expected_bin}, got {actual_bin}"
     
-    print("✓ Hour binning working correctly\n")
+    print(" Hour binning working correctly\n")
 
 
 def test_anxiety_stats_integration():
@@ -174,7 +173,7 @@ def test_anxiety_stats_integration():
         assert 0.0 <= mean <= 1.0, f"T{i+1}: Mean {mean} out of range"
         assert std >= 0.0, f"T{i+1}: Negative std {std}"
     
-    print("✓ Anxiety statistics integration working correctly\n")
+    print("Anxiety statistics integration working correctly\n")
 
 
 def test_visualization_data_structure():
@@ -217,12 +216,12 @@ def test_visualization_data_structure():
         lower = max(0.0, mean - std)  # Clip to [0,1]
         confidence_bands.append((lower, upper))
     
-    print("Sample confidence bands (mean ± std, clipped to [0,1]):")
+    print("Sample confidence bands (mean +- std, clipped to [0,1]):")
     for i in range(0, 24, 6):  # Show every 6 hours
         mean = realistic_pattern[i]
         std = realistic_std[i]
         lower, upper = confidence_bands[i]
-        print(f"  T{i+1:2d}: {mean:.3f} ± {std:.3f} → [{lower:.3f}, {upper:.3f}]")
+        print(f"  T{i+1:2d}: {mean:.3f} +- {std:.3f} -> [{lower:.3f}, {upper:.3f}]")
     
     # Find peak and low periods
     peak_hour = realistic_pattern.index(max(realistic_pattern)) + 1
@@ -234,7 +233,7 @@ def test_visualization_data_structure():
     print(f"  Total samples: {sum(realistic_counts)}")
     print(f"  Hours with data: {sum(1 for c in realistic_counts if c > 0)}/24")
     
-    print("✓ Visualization data structure correct\n")
+    print(" Visualization data structure correct\n")
 
 
 def run_all_tests():
@@ -250,17 +249,13 @@ def run_all_tests():
         test_visualization_data_structure()
         
         print("="*60)
-        print("✓ ALL CORE TESTS PASSED")
+        print(" ALL CORE TESTS PASSED")
         print("The anxiety recording algorithms are working correctly!")
-        print("\nNext steps:")
-        print("1. Copy the updated code files to your simulation directory")
-        print("2. Run your main simulation with the new anxiety recording")
-        print("3. The system will automatically generate the anxiety plot")
         print("="*60)
         
     except Exception as e:
         print("="*60)
-        print("✗ TEST FAILED")
+        print(" TEST FAILED")
         print(f"Error: {e}")
         print("="*60)
         import traceback

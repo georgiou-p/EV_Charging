@@ -202,34 +202,34 @@ class EVDriver:
         # Update threshold-based anxiety whenever SoC changes
         self.update_threshold_anxiety(charging_relief_factor=0.0)
     
-    # def set_battery_level(self, new_soc):
-    #     """Set battery to a specific level and update threshold anxiety"""
-    #     old_soc = self.state_of_charge
+    def set_battery_level(self, new_soc):
+        """Set battery to a specific level and update threshold anxiety"""
+        old_soc = self.state_of_charge
         
-    #     # Calculate charging relief BEFORE updating anything
-    #     relief_factor = 0.0
-    #     if new_soc > old_soc and abs(new_soc - old_soc) > 0.05:  # Charging occurred
-    #         charge_amount = new_soc - old_soc
-    #         relief_factor = min(0.75, charge_amount * 2.5)  # Cap at 75% relief
+        # Calculate charging relief BEFORE updating anything
+        relief_factor = 0.0
+        if new_soc > old_soc and abs(new_soc - old_soc) > 0.05:  # Charging occurred
+            charge_amount = new_soc - old_soc
+            relief_factor = min(0.75, charge_amount * 2.5)  # Cap at 75% relief
             
-    #         # Store current anxiety BEFORE any changes
-    #         old_total_anxiety = self.get_current_anxiety()
+            # Store current anxiety BEFORE any changes
+            old_total_anxiety = self.get_current_anxiety()
             
-    #         # Apply relief to accumulated penalties (queue and slow charger)
-    #         if relief_factor > 0.1:  # Only apply relief if >10%
-    #             self.current_penalties['queue_time'] *= (1.0 - relief_factor)
-    #             self.current_penalties['slow_charger_time'] *= (1.0 - relief_factor)
+            # Apply relief to accumulated penalties (queue and slow charger)
+            if relief_factor > 0.1:  # Only apply relief if >10%
+                self.current_penalties['queue_time'] *= (1.0 - relief_factor)
+                self.current_penalties['slow_charger_time'] *= (1.0 - relief_factor)
         
-    #     self.state_of_charge = max(0.0, min(1.0, new_soc))
+        self.state_of_charge = max(0.0, min(1.0, new_soc))
         
-    #     # Update threshold-based anxiety with charging relief applied
-    #     if abs(new_soc - old_soc) > 0.05:  # 5% change
-    #         self.update_threshold_anxiety(charging_relief_factor=relief_factor)
+        # Update threshold-based anxiety with charging relief applied
+        if abs(new_soc - old_soc) > 0.05:  # 5% change
+            self.update_threshold_anxiety(charging_relief_factor=relief_factor)
             
-    #         # Log charging relief if it occurred
-    #         if new_soc > old_soc and relief_factor > 0.1:
-    #             new_total_anxiety = self.get_current_anxiety()
-    #             print(f"[Driver] Charging relief: +{charge_amount*100:.0f}% SoC, {relief_factor*100:.0f}% penalty reduction ({old_total_anxiety:.3f} -> {new_total_anxiety:.3f})")
+            # Log charging relief if it occurred
+            if new_soc > old_soc and relief_factor > 0.1:
+                new_total_anxiety = self.get_current_anxiety()
+                print(f"[Driver] Charging relief: +{charge_amount*100:.0f}% SoC, {relief_factor*100:.0f}% penalty reduction ({old_total_anxiety:.3f} -> {new_total_anxiety:.3f})")
     
     # Path traversal methods
     def find_shortest_path(self, graph):
