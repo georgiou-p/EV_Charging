@@ -551,7 +551,7 @@ class SimpleEVSimulation:
         print(f"Graph has {len(self.graph.nodes)} nodes")
         
         # Spawn cars with hourly demand distribution
-        self.env.process(self.spawn_multiple_cars(total_cars=1000, simulation_duration_hours=24)) #CARSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS
+        self.env.process(self.spawn_multiple_cars(total_cars=1000, simulation_duration_hours=24))
         
         # Run simulation
         if self.simulation_time:
@@ -628,7 +628,7 @@ def main():
     geojson_path = "data/UK_Mainland_GB_simplified.geojson"
     stations_json_path = "data/cleaned_charging_stations.json"
     
-    random.seed(123)
+    random.seed(1)
     try:
         graph, node_stations = assign_charging_stations_to_nodes(
             geojson_path, 
