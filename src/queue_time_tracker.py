@@ -11,20 +11,179 @@ class QueueTimeTracker:
         
         # Store driver counts for each hour
         self.hourly_driver_counts = [[] for _ in range(24)]
+
+        self.hourly_soc_data = [[] for _ in range(24)]  # Store SoC samples for each hour
+        self.last_soc_sample_time = 0
+        self.soc_sample_interval = 2  # Sample every 10 minutes
         
-        # Track when we sample driver counts
         self.last_driver_count_time = 0
-        self.driver_count_interval = 10  # Sample every 10 minutes
+        self.driver_count_interval = 10
     
+    def should_sample_soc(self, simulation_time):
+        """Check if it's time to sample SoC data"""
+        if simulation_time >= 1440:
+            return False
+        if simulation_time - self.last_soc_sample_time >= self.soc_sample_interval:
+            self.last_soc_sample_time = simulation_time
+            return True
+        return False
+    
+    def record_soc_data(self, simulation_time, total_soc, active_drivers):
+        """Record SoC data for the appropriate hour"""
+        if simulation_time >= 1440 or active_drivers == 0:
+            return
+        
+        hour_idx = self._get_hour_index(simulation_time)
+        avg_soc = total_soc / active_drivers
+        
+        # Store as tuple: (simulation_time, avg_soc, active_drivers)
+        self.hourly_soc_data[hour_idx].append({
+            'time': simulation_time,
+            'avg_soc': avg_soc,
+            'active_drivers': active_drivers,
+            'total_soc': total_soc
+        })
+    
+    def calculate_hourly_soc_statistics(self):
+        """Calculate SoC statistics using MEAN as primary metric"""
+        hours = list(range(1, 25))  # T1 to T24
+        avg_soc_by_hour = []        
+        std_soc_by_hour = []
+        q1_soc_by_hour = []
+        q3_soc_by_hour = []
+        median_soc_by_hour = []     
+        sample_counts_soc = []
+
+        for hour_idx in range(24):
+            soc_data = self.hourly_soc_data[hour_idx]
+
+            if soc_data and len(soc_data) >= 3:
+                avg_socs = [entry['avg_soc'] for entry in soc_data]
+
+                hour_avg = np.mean(avg_socs)
+                hour_median = np.median(avg_socs)  # Keep for reference
+                hour_std = np.std(avg_socs) if len(avg_socs) > 1 else 0
+
+                # Calculate quartiles
+                if len(avg_socs) >= 4:
+                    hour_q1 = np.percentile(avg_socs, 25)
+                    hour_q3 = np.percentile(avg_socs, 75)
+                else:
+                    # For small samples, use mean ± std as approximation
+                    hour_q1 = max(0, hour_avg - hour_std)
+                    hour_q3 = min(1, hour_avg + hour_std)
+
+                avg_soc_by_hour.append(hour_avg)        
+                median_soc_by_hour.append(hour_median)
+                std_soc_by_hour.append(hour_std)
+                q1_soc_by_hour.append(hour_q1)
+                q3_soc_by_hour.append(hour_q3)
+                sample_counts_soc.append(len(soc_data))
+
+            else:
+                avg_soc_by_hour.append(0)
+                median_soc_by_hour.append(0)
+                std_soc_by_hour.append(0)
+                q1_soc_by_hour.append(0)
+                q3_soc_by_hour.append(0)
+                sample_counts_soc.append(0)
+
+        
+        return (hours, avg_soc_by_hour, std_soc_by_hour, median_soc_by_hour, 
+                q1_soc_by_hour, q3_soc_by_hour, sample_counts_soc)
+    
+    
+    def export_soc_data_to_csv(self, filename="hourly_soc_data.csv"):
+        """
+        Export SoC data with median as primary metric
+        Creates both summary and detailed CSV files
+        """
+        import pandas as pd
+
+        # Get statistics 
+        (hours, mean_soc, std_soc, median_soc, 
+         q1_soc, q3_soc, sample_counts) = self.calculate_hourly_soc_statistics()
+
+        # Create summary DataFrame with median as primary metric
+        summary_data = []
+        for i in range(24):
+            summary_data.append({
+                'Hour': f"T{i+1}",
+                'Hour_Number': i + 1,
+                'Mean_SoC': mean_soc[i], 
+                'Median_SoC': median_soc[i],      
+                'Std_SoC': std_soc[i],            # Standard deviation
+                'Q1_SoC': q1_soc[i],              # 25th percentile
+                'Q3_SoC': q3_soc[i],              # 75th percentile
+                'Sample_Count': sample_counts[i]   # Number of samples
+            })
+
+        # Export summary CSV
+        summary_df = pd.DataFrame(summary_data)
+        summary_df.to_csv(filename, index=False)
+        print(f" SoC summary (median-based) exported to {filename}")
+
+        # Export detailed data CSV
+        detailed_filename = filename.replace('.csv', '_detailed.csv')
+        all_detailed_data = []
+
+        for hour_idx in range(24):
+            hour_label = f"T{hour_idx + 1}"
+            soc_data = self.hourly_soc_data[hour_idx]
+
+            for entry in soc_data:
+                all_detailed_data.append({
+                    'Hour': hour_label,
+                    'Hour_Number': hour_idx + 1,
+                    'Simulation_Time': entry['time'],
+                    'Average_SoC': entry['avg_soc'],        # Individual sample SoC
+                    'Active_Drivers': entry['active_drivers'], # Drivers at this time
+                    'Total_SoC': entry['total_soc']         # Sum of all SoCs
+                })
+
+        # Export detailed CSV if we have data
+        if all_detailed_data:
+            detailed_df = pd.DataFrame(all_detailed_data)
+            detailed_df.to_csv(detailed_filename, index=False)
+            print(f" Detailed SoC data exported to {detailed_filename}")
+
+            # Print data quality summary
+            print(f"\n SoC Data Quality Summary:")
+            print(f"   Total samples collected: {len(all_detailed_data)}")
+            print(f"   Hours with data: {len([h for h in sample_counts if h > 0])}/24")
+
+            if sample_counts:
+                valid_counts = [c for c in sample_counts if c > 0]
+                if valid_counts:
+                    print(f"   Average samples per active hour: {sum(valid_counts)/len(valid_counts):.1f}")
+                    print(f"   Sample range: {min(valid_counts)} - {max(valid_counts)} per hour")
+        else:
+            print(f"  No detailed SoC data to export")
+
+        # Print median vs mean comparison
+        print(f"\n Median vs Mean SoC Comparison:")
+        for i in range(24):
+            if sample_counts[i] > 0:
+                diff = abs(median_soc[i] - mean_soc[i])
+                if diff > 0.05:  # Significant difference
+                    print(f"   T{i+1}: Median={median_soc[i]:.3f}, Mean={mean_soc[i]:.3f} (diff: {diff:.3f})")
+
+        return summary_df
+
     def _get_hour_index(self, simulation_time):
         """Convert simulation time (minutes) to hour index 0-23"""
         return int(simulation_time // 60) % 24
     
     def record_queue_time(self, simulation_time, queue_time_minutes):
-        """Record a queue time for the appropriate hour"""
+        queue_start_time = simulation_time - queue_time_minutes
+    
         if simulation_time >= 1440:
-            print(f"DEBUG: Ignoring queue event at time {simulation_time:.1f} (after 1440 min cutoff)")
+            print(f"DEBUG: Ignoring late completion - started: {queue_start_time:.1f}, ended: {simulation_time:.1f}, duration: {queue_time_minutes:.1f}")
             return
+    
+        if queue_start_time >= 1380:  # Last hour
+            print(f"DEBUG: T24 event - started: {queue_start_time:.1f}, ended: {simulation_time:.1f}, duration: {queue_time_minutes:.1f}")
+
         hour_idx = self._get_hour_index(simulation_time)
         self.hourly_queue_times[hour_idx].append(queue_time_minutes)
     

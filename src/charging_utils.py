@@ -139,7 +139,7 @@ def charge_at_station_with_queue_tolerance(env, car_id, target_node, target_stat
             
             # QUEUE TRACKING: Record in hourly tracker if simulation object provided
             if simulation and hasattr(simulation, 'record_queue_event'):
-                simulation.record_queue_event(queue_time)
+                simulation.record_queue_event(queue_time, queue_start_time)
         else:
             print(f"[T={env.now:.1f}] Car {car_id}: Got charging slot immediately")
         

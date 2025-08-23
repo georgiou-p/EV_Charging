@@ -1,6 +1,7 @@
 import networkx as nx
 from typing import List, Optional, Tuple
 from charging_utils import has_compatible_connector, calculate_queue_wait_time
+import random
 
 def get_shortest_path(graph, source_node, destination_node):
     """
@@ -107,7 +108,9 @@ def find_nearest_charging_station(graph, current_node, planned_route, max_range,
         print(f"       {route_context} | Distance: {distance:.1f}km | Queue: {queue_len} cars ({estimated_wait}min) | Power: {max_power}kW")
     
     # Return best station
-    best_node, best_station, best_score, best_distance = all_station_options[0]
+    top_score = all_station_options[0][2]
+    top_candidates = [opt for opt in all_station_options if opt[2] == top_score]
+    best_node, best_station, best_score, best_distance = random.choice(top_candidates)
     best_station_id = best_station.get_station_id()
     
     # Log the selection decision
@@ -121,8 +124,6 @@ def find_nearest_charging_station(graph, current_node, planned_route, max_range,
         else:
             route_context = f"current location (pos {best_node_position})"
         return best_node, best_station_id
-    if driver:
-        expected_wait = calculate_queue_wait_time(best_station, connector_type)
         
     return best_node,best_station_id
 
@@ -167,7 +168,7 @@ def score_individual_station(station, node, distance, planned_route, connector_t
     if planned_route and node in planned_route:
         try:
             route_position = planned_route.index(node)
-            
+            # #QUEUE FURTHER AWAY
             if route_position > current_route_position:
                 # Station is AHEAD on our planned route
                 positions_ahead = route_position - current_route_position
@@ -175,7 +176,7 @@ def score_individual_station(station, node, distance, planned_route, connector_t
                 if positions_ahead >= 3:
                     route_factor = 2.2  # Big bonus for strategic forward planning
                 else:
-                    route_factor = 2.0  # Good bonus for immediate forward progress
+                    route_factor = 0.8  # Not good bonus for immediate forward progress
                 route_description = f"AHEAD_{positions_ahead}_NODES"
                 
             elif route_position < current_route_position:
@@ -189,9 +190,32 @@ def score_individual_station(station, node, distance, planned_route, connector_t
                 
             else:
                 # Station is at current position - moderate bonus
-                route_factor = 1.3
+                route_factor = 0.8
                 route_description = "CURRENT_POSITION"
-                
+
+            #QUEUE CLOSER TO ME
+            # if route_position > current_route_position:
+            #     # Node is AHEAD on route — closer ahead is better
+            #     positions_ahead = route_position - current_route_position
+            #     if positions_ahead == 1:
+            #         route_factor = 2.2    # next step ahead: strong bonus
+            #     elif positions_ahead == 2:
+            #         route_factor = 2.0   # two steps ahead: modest bonus
+            #     else:
+            #         route_factor = 0.8    # far ahead: small penalty
+            # elif route_position < current_route_position:
+            #     # Node is BEHIND
+            #     positions_behind = current_route_position - route_position
+            #     if positions_behind >= 3:
+            #         route_factor = 0.4  # Heavy penalty for going way back
+            #     else:
+            #         route_factor = 0.6  # Moderate penalty for minor backtracking
+            #     route_description = f"BEHIND_{positions_behind}_NODES"
+            # else:
+            #     # CURRENT position gets the biggest boost
+            #     route_factor = 3 
+            #     route_description = "CURRENT_POSITION"
+
         except ValueError:
             # This shouldn't happen if node is in planned_route, but handle gracefully
             route_factor = 1.0

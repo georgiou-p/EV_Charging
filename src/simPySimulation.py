@@ -1,6 +1,7 @@
 import simpy
 import random
 import networkx as nx
+import numpy as np
 from station_assignment import assign_charging_stations_to_nodes
 from evDriver import EVDriver
 from pathfinding import (find_nearest_charging_station, travel_to_charging_station,travel_to_next_node)
@@ -21,6 +22,8 @@ class SimpleEVSimulation:
         
         # Create SimPy resources from existing charging stations
         self._setup_charging_resources()
+
+        self.active_drivers = {}
         
         # Statistics
         self.stats = {
@@ -42,15 +45,36 @@ class SimpleEVSimulation:
         nodes_with_stations = setup_charging_resources(self.env, self.graph)
         print(f"Created SimPy resources for {nodes_with_stations} nodes with charging stations")
     
-    def record_queue_event(self, queue_time_minutes):
+    def record_queue_event(self, queue_time_minutes, queue_start_time=None):
         """Record a queue time event for hourly tracking"""
-        self.queue_tracker.record_queue_time(self.env.now, queue_time_minutes)
+        # Use start time if provided, otherwise current time (for backward compatibility)
+        record_time = queue_start_time if queue_start_time is not None else self.env.now
+        self.queue_tracker.record_queue_time(record_time, queue_time_minutes)
     
-    def update_driver_count(self):
-        """Update active driver count if it's time to sample"""
-        if self.queue_tracker.should_sample_driver_count(self.env.now):
-            active_drivers = self.stats['cars_spawned'] - self.stats['cars_completed'] - self.stats['cars_stranded']
-            self.queue_tracker.record_driver_count(self.env.now, active_drivers)
+    def register_active_driver(self, car_id, driver):
+        """Register a driver as active"""
+        self.active_drivers[car_id] = driver
+    
+    def unregister_active_driver(self, car_id):
+        """Remove a driver from active list"""
+        if car_id in self.active_drivers:
+            del self.active_drivers[car_id]
+    
+    def update_driver_count_and_soc(self):
+        """Update both driver count and SoC sampling"""
+        current_time = self.env.now
+        
+        # Existing driver count update
+        if self.queue_tracker.should_sample_driver_count(current_time):
+            active_count = len(self.active_drivers)
+            self.queue_tracker.record_driver_count(current_time, active_count)
+        
+        # NEW: SoC sampling
+        if self.queue_tracker.should_sample_soc(current_time):
+            if self.active_drivers:
+                total_soc = sum(driver.get_state_of_charge() for driver in self.active_drivers.values())
+                active_count = len(self.active_drivers)
+                self.queue_tracker.record_soc_data(current_time, total_soc, active_count)
     
     def car_process(self, car_id, path, initial_soc, connector_type, total_distance_km, battery_capacity_km):
         """
@@ -63,13 +87,15 @@ class SimpleEVSimulation:
         # Create the driver/car
         driver = EVDriver(source_node, destination_node, initial_soc, connector_type, battery_capacity_km)
         driver.set_current_path(path)
+
+        self.register_active_driver(car_id, driver)
         
         # Configuration - battery range in kilometers
         current_range_km = driver.get_range_remaining()
         print(f"[T={self.env.now:.1f}] Car {car_id}: Can travel {current_range_km:.2f}km out of {total_distance_km:.2f}km with current battery")
         
         # Update driver count when car starts
-        self.update_driver_count()
+        self.update_driver_count_and_soc()
         
         #--------------------MAIN JOURNEY LOOP-----------------------------------------------------------------------------------------------------------------------
         loop_counter = 0
@@ -81,7 +107,7 @@ class SimpleEVSimulation:
             
             # Periodically update driver count
             if loop_counter % 5 == 0:  # Every 5 loop iterations
-                self.update_driver_count()
+                self.update_driver_count_and_soc()
             
             # Check if we can make the next move
             if not driver.can_reach_next_node(self.graph):
@@ -90,6 +116,7 @@ class SimpleEVSimulation:
                 if not success:
                     print(f"[T={self.env.now:.1f}] Car {car_id}: STRANDED at {current_node} - no compatible charging!")
                     self.stats['cars_stranded'] += 1
+                    self.unregister_active_driver(car_id)
                     return
                 continue  # Restart loop after charging
             
@@ -102,6 +129,7 @@ class SimpleEVSimulation:
                 if not success:
                     print(f"[T={self.env.now:.1f}] Car {car_id}: STRANDED - no compatible charging stations within range!")
                     self.stats['cars_stranded'] += 1
+                    self.unregister_active_driver(car_id)
                     return
                 continue  # Restart loop after charging
             else:
@@ -115,19 +143,23 @@ class SimpleEVSimulation:
             if driver.is_battery_empty():
                 print(f"[T={self.env.now:.1f}] Car {car_id}: STRANDED! Battery empty at node {driver.get_current_node()}")
                 self.stats['cars_stranded'] += 1
+                self.unregister_active_driver(car_id)
                 return
         
         if loop_counter >= max_loops:
             print(f"[T={self.env.now:.1f}] Car {car_id}: Stopped due to loop limit - possible infinite loop prevented")
             self.stats['cars_stranded'] += 1
+            self.unregister_active_driver(car_id)
             return
         
         # Journey completed
         print(f"[T={self.env.now:.1f}] Car {car_id}: Reached destination {destination_node}!")
         self.stats['cars_completed'] += 1
+
+        self.unregister_active_driver(car_id)
         
         # Update driver count when car completes
-        self.update_driver_count()
+        self.update_driver_count_and_soc()
     
     def _handle_charging_stop(self, car_id, driver):
         """
@@ -314,13 +346,13 @@ class SimpleEVSimulation:
             1.0,  # T4  (03:00–04:00)
             3.0,  # T5  (04:00–05:00)
             6.0,  # T6  (05:00–06:00)
-            9.0,  # T7  (06:00–07:00)
-            10.4, # T8  (07:00–08:00)
-            11.5, # T9  (08:00–09:00)
-            12.5, # T10 (09:00–10:00) ← peak
-            9.4,  # T11 (10:00–11:00)
-            7.8,  # T12 (11:00–12:00)
-            6.2,  # T13 (12:00–13:00)
+            9.5,  # T7  (06:00–07:00)
+            11.0, # T8  (07:00–08:00)
+            12.5, # T9  (08:00–09:00) ← peak
+            11.8, # T10 (09:00–10:00)
+            8.8,  # T11 (10:00–11:00)
+            7.2,  # T12 (11:00–12:00)
+            6.0,  # T13 (12:00–13:00)
             5.0,  # T14 (13:00–14:00)
             4.0,  # T15 (14:00–15:00)
             3.0,  # T16 (15:00–16:00)
@@ -492,6 +524,8 @@ class SimpleEVSimulation:
                 abandonment_rate = (self.stats['queue_abandonments'] / self.stats['cars_spawned']) * 100
                 print(f"Queue abandonment rate: {abandonment_rate:.1f}%")
 
+        
+
         # ENHANCED: Print hourly queue analysis and create plots
         print("\n" + "="*60)
         print("HOURLY QUEUE TIME ANALYSIS")
@@ -502,8 +536,20 @@ class SimpleEVSimulation:
         
         # Create the visualization
         print("\nGenerating queue time visualization...")
-        self.queue_tracker.plot_hourly_queue_times("EV Charging Queue Times Throughout the Day")
+        #self.queue_tracker.plot_hourly_queue_times("EV Charging Queue Times Throughout the Day")
         
+        print("\n=== SoC Data Analysis ===")
+        self.queue_tracker.export_soc_data_to_csv("simulation_soc_data.csv")
+        
+        # Print SoC summary
+        (hours, avg_soc, std_soc, median_soc, q1_soc, q3_soc, counts) = self.queue_tracker.calculate_hourly_soc_statistics()
+        # Print SoC summary
+        print(f"SoC Statistics:")
+        for i in range(24):
+            if counts[i] > 0:
+                print(f"  T{i+1}: Avg SoC = {avg_soc[i]:.3f} ({avg_soc[i]*100:.1f}%), "
+                    f"Median = {median_soc[i]:.3f}, Samples = {counts[i]}")
+    
         return self.queue_tracker
 
 
@@ -514,7 +560,8 @@ def main():
     geojson_path = "data/UK_Mainland_GB_simplified.geojson"
     stations_json_path = "data/cleaned_charging_stations.json"
     
-    random.seed(123)
+    #random.seed(1)
+    #np.random.seed(1)
     try:
         graph, node_stations = assign_charging_stations_to_nodes(
             geojson_path, 

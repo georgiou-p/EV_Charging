@@ -9,12 +9,12 @@ class MultiRunAnalyzer:
     """
     Runs multiple simulations with different seeds and combines results
     """
-    def __init__(self, num_runs=1):
+    def __init__(self, num_runs=4):
         self.num_runs = num_runs
         self.all_run_results = []
         self.combined_stats = {}
         
-    def run_multiple_simulations(self, graph, total_cars=10000, base_seed=123):
+    def run_multiple_simulations(self, graph, total_cars=10000, base_seed=1):
         """
         Run simulation multiple times with different seeds
         """
@@ -278,59 +278,63 @@ class MultiRunAnalyzer:
     
     def plot_combined_results(self):
         """
-        Create queue time plot only
+        Create queue time plot showing MEDIAN only (not mean)
         """
         hourly_stats = self.calculate_combined_hourly_statistics()
-        
+
         # Create single figure for main plot only
         fig, ax1 = plt.subplots(figsize=(16, 10))
         ax2 = ax1.twinx()
-        
+
         x = np.array(hourly_stats['hours'])
-        avg_queue = np.array(hourly_stats['avg_queue_times'])
+        # CHANGED: Use median instead of mean
+        median_queue = np.array(hourly_stats['median_queue_times'])  # Use median instead of avg
         q1_queue = np.array(hourly_stats['q1_queue_times'])
         q3_queue = np.array(hourly_stats['q3_queue_times'])
-        median_queue = np.array(hourly_stats['median_queue_times'])
         avg_drivers = np.array(hourly_stats['avg_driver_counts'])
         std_drivers = np.array(hourly_stats['std_driver_counts'])
-        
-        # Plot queue times
+
+        # Plot queue times - CHANGED: median instead of mean
         ax1.fill_between(x, q1_queue, q3_queue, alpha=0.3, color='lightcoral', 
                         label='Interquartile Range (Q1-Q3)')
-        ax1.plot(x, avg_queue, color='darkred', linewidth=3, marker='o', 
-                markersize=6, label='Mean Queue Time')
-        ax1.plot(x, median_queue, color='red', linewidth=2, linestyle='--', 
-                alpha=0.8, label='Median Queue Time')
-        
-        # Plot driver counts with error bars
+        # CHANGED: Plot median as the main line
+        ax1.plot(x, median_queue, color='darkred', linewidth=3, marker='o', 
+                markersize=6, label='Median Queue Time')  # Changed from 'Mean' to 'Median'
+
+        # Optional: Remove the redundant median line since it's now the main line
+        # ax1.plot(x, median_queue, color='red', linewidth=2, linestyle='--', 
+        #         alpha=0.8, label='Median Queue Time')
+
+        # Plot driver counts with error bars (keep as is)
         ax2.errorbar(x, avg_drivers, yerr=std_drivers, color='steelblue', 
                     linewidth=2, marker='s', markersize=4, alpha=0.8, 
                     capsize=3, label='Active Drivers (±1σ)')
-        
+
         # Customize main plot
         ax1.set_xlabel('Time of Day (T1–T24)', fontsize=14, fontweight='bold')
         ax1.set_ylabel('Queue Time (minutes)', fontsize=14, fontweight='bold', color='darkred')
-        ax1.set_title('Combined Results: Queue Times & Active Drivers (5 Runs)', 
+        # CHANGED: Update title to reflect median
+        ax1.set_title('Combined Results: Median Queue Times & Active Drivers (Multiple Runs)', 
                      fontsize=16, fontweight='bold', pad=20)
         ax1.tick_params(axis='y', labelcolor='darkred')
-        
+
         ax2.set_ylabel('Number of Active Drivers', fontsize=14, fontweight='bold', color='steelblue')
         ax2.tick_params(axis='y', labelcolor='steelblue')
-        
-        # Set x-axis
-        ax1.set_xticks(x[::1])  # Every 2 hours
-        ax1.set_xticklabels([f'T{i}' for i in x[::2]], rotation=45)
-        
+
+        # FIXED: Set x-axis ticks properly
+        ax1.set_xticks(x[::2])  # Every 2 hours to avoid crowding
+        ax1.set_xticklabels([f'{i-1:02d}:00' for i in x[::2]], rotation=45)
+
         # Legends
         lines1, labels1 = ax1.get_legend_handles_labels()
         lines2, labels2 = ax2.get_legend_handles_labels()
         ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper left', fontsize=11)
-        
+
         ax1.grid(True, alpha=0.3)
-        
+
         plt.tight_layout()
         plt.show()
-        
+
         return fig
     
     def export_results(self, filename_base="simulation_results"):
@@ -362,19 +366,19 @@ class MultiRunAnalyzer:
         with open(f"{filename_base}_summary.json", 'w') as f:
             json.dump(summary_data, f, indent=2, default=str)
         
-        # Save hourly data as CSV
         hourly_stats = self.calculate_combined_hourly_statistics()
         df = pd.DataFrame({
             'Hour': [f"T{i}" for i in hourly_stats['hours']],
+            'Hour_Number': hourly_stats['hours'],  
             'Time_Range': [f"{i-1:02d}:00-{i:02d}:00" for i in hourly_stats['hours']],
             'Sample_Count': hourly_stats['sample_counts'],
             'Mean_Queue_Time': hourly_stats['avg_queue_times'],
-            'Median_Queue_Time': hourly_stats['median_queue_times'],
+            'Median_Queue_Time': hourly_stats['median_queue_times'],  
             'Std_Queue_Time': hourly_stats['std_queue_times'],
-            'Q1_Queue_Time': hourly_stats['q1_queue_times'],
-            'Q3_Queue_Time': hourly_stats['q3_queue_times'],
-            'Mean_Active_Drivers': hourly_stats['avg_driver_counts'],
-            'Std_Active_Drivers': hourly_stats['std_driver_counts']
+            'Q1_Queue_Time': hourly_stats['q1_queue_times'],           
+            'Q3_Queue_Time': hourly_stats['q3_queue_times'],          
+            'Mean_Active_Drivers': hourly_stats['avg_driver_counts'], 
+            'Std_Active_Drivers': hourly_stats['std_driver_counts']  
         })
         
         df.to_csv(f"{filename_base}_hourly.csv", index=False)
@@ -382,6 +386,71 @@ class MultiRunAnalyzer:
         print(f" Results exported:")
         print(f"  Summary: {filename_base}_summary.json")
         print(f"  Hourly data: {filename_base}_hourly.csv")
+
+        combined_soc_data = []
+    
+        for run_result in self.all_run_results:
+            queue_tracker = run_result['queue_tracker']
+            run_number = run_result['run_number']
+        
+            # Extract SoC data from this run
+            for hour_idx in range(24):
+                hour_label = f"T{hour_idx + 1}"
+                soc_data = queue_tracker.hourly_soc_data[hour_idx]
+
+                for entry in soc_data:
+                    combined_soc_data.append({
+                        'Run': run_number,
+                        'Hour': hour_label,
+                        'Hour_Number': hour_idx + 1,
+                        'Simulation_Time': entry['time'],
+                        'Average_SoC': entry['avg_soc'],
+                        'Active_Drivers': entry['active_drivers'],
+                        'Total_SoC': entry['total_soc']
+                    })
+
+        # Save combined SoC data
+        soc_df = pd.DataFrame(combined_soc_data)
+        soc_df.to_csv(f"{filename_base}_soc_data.csv", index=False)
+        print(f"Combined SoC data exported: {filename_base}_soc_data.csv")
+
+        # Calculate hourly SoC averages across all runs
+        hourly_soc_summary = []
+        for hour_idx in range(24):
+            hour_data = soc_df[soc_df['Hour_Number'] == hour_idx + 1]
+            if not hour_data.empty:
+                hourly_soc_summary.append({
+                    'Hour': f"T{hour_idx + 1}",
+                    'Hour_Number': hour_idx + 1,
+                    'Median_SoC': hour_data['Average_SoC'].median(),
+                    'Mean_SoC': hour_data['Average_SoC'].mean(),
+                    'Std_SoC': hour_data['Average_SoC'].std(),
+                    'Min_SoC': hour_data['Average_SoC'].min(),
+                    'Max_SoC': hour_data['Average_SoC'].max(),
+                    'Sample_Count': len(hour_data)
+                })
+            else:
+                hourly_soc_summary.append({
+                    'Hour': f"T{hour_idx + 1}",
+                    'Hour_Number': hour_idx + 1,
+                    'Mean_SoC': 0,
+                    'Median_SoC': 0,
+                    'Std_SoC': 0,
+                    'Min_SoC': 0,
+                    'Max_SoC': 0,
+                    'Sample_Count': 0
+                    })
+
+        # Save hourly SoC summary
+        soc_summary_df = pd.DataFrame(hourly_soc_summary)
+        soc_summary_df.to_csv(f"{filename_base}_soc_hourly_summary.csv", index=False)
+        print(f"Hourly SoC summary exported: {filename_base}_soc_hourly_summary.csv")
+
+        print(f"\nResults exported:")
+        print(f"  Summary: {filename_base}_summary.json")
+        print(f"  Hourly data: {filename_base}_hourly.csv")
+        print(f"  SoC data: {filename_base}_soc_data.csv")
+        print(f"  SoC summary: {filename_base}_soc_hourly_summary.csv")
 
 
 def run_multi_simulation_analysis():
@@ -407,8 +476,8 @@ def run_multi_simulation_analysis():
         print(f"Graph loaded successfully with {len(graph.nodes)} nodes")
         
         # Create analyzer and run multiple simulations
-        analyzer = MultiRunAnalyzer(num_runs=1)
-        success = analyzer.run_multiple_simulations(graph, total_cars=10000, base_seed=123)
+        analyzer = MultiRunAnalyzer(num_runs=4)
+        success = analyzer.run_multiple_simulations(graph, total_cars=10000, base_seed=1)
         
         if success:
             # Print combined summary
