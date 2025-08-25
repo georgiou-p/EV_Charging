@@ -461,7 +461,7 @@ def run_multi_simulation_analysis():
     
     # Load data
     geojson_path = "data/UK_Mainland_GB_simplified.geojson"
-    stations_json_path = "data/cleaned_charging_stations.json"
+    stations_json_path = "data/TargetedWeightedFailures.json"
     
     try:
         graph, node_stations = assign_charging_stations_to_nodes(

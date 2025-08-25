@@ -174,8 +174,8 @@ def plot_anxiety_levels_with_drivers(soc_csv_path, queue_csv_path):
     
     return fig2, ax2
 
-def plot_both_separate_windows(queue_csv_path="Queue1_1.csv", 
-                              soc_csv_path="SoC1_1.csv"):
+def plot_both_separate_windows(queue_csv_path="Queue3_3.csv", 
+                              soc_csv_path="SoC3_3.csv"):
     """
     Plot both graphs in separate windows - anxiety graph now includes active drivers
     """

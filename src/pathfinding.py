@@ -169,29 +169,29 @@ def score_individual_station(station, node, distance, planned_route, connector_t
         try:
             route_position = planned_route.index(node)
             # #QUEUE FURTHER AWAY
-            if route_position > current_route_position:
-                # Station is AHEAD on our planned route
-                positions_ahead = route_position - current_route_position
-                # Give bigger bonus for stations further ahead 
-                if positions_ahead >= 3:
-                    route_factor = 2.2  # Big bonus for strategic forward planning
-                else:
-                    route_factor = 0.8  # Not good bonus for immediate forward progress
-                route_description = f"AHEAD_{positions_ahead}_NODES"
+            # if route_position > current_route_position:
+            #     # Station is AHEAD on our planned route
+            #     positions_ahead = route_position - current_route_position
+            #     # Give bigger bonus for stations further ahead 
+            #     if positions_ahead >= 3:
+            #         route_factor = 2.2  # Big bonus for strategic forward planning
+            #     else:
+            #         route_factor = 0.8  # Not good bonus for immediate forward progress
+            #     route_description = f"AHEAD_{positions_ahead}_NODES"
                 
-            elif route_position < current_route_position:
-                # Station is BEHIND us on route 
-                positions_behind = current_route_position - route_position
-                if positions_behind >= 3:
-                    route_factor = 0.4  # Heavy penalty for going way back
-                else:
-                    route_factor = 0.6  # Moderate penalty for minor backtracking
-                route_description = f"BEHIND_{positions_behind}_NODES"
+            # elif route_position < current_route_position:
+            #     # Station is BEHIND us on route 
+            #     positions_behind = current_route_position - route_position
+            #     if positions_behind >= 3:
+            #         route_factor = 0.4  # Heavy penalty for going way back
+            #     else:
+            #         route_factor = 0.6  # Moderate penalty for minor backtracking
+            #     route_description = f"BEHIND_{positions_behind}_NODES"
                 
-            else:
-                # Station is at current position - moderate bonus
-                route_factor = 0.8
-                route_description = "CURRENT_POSITION"
+            # else:
+            #     # Station is at current position - moderate bonus
+            #     route_factor = 0.8
+            #     route_description = "CURRENT_POSITION"
 
             #QUEUE CLOSER TO ME
             # if route_position > current_route_position:

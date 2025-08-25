@@ -18,7 +18,7 @@ def get_station_capacity(charging_stations):
 
 def charge_at_station_with_queue_tolerance(env, car_id, target_node, target_station_id, graph, stats, driver, simulation=None, target_soc=0.8):
     """
-    Unified charging function with alternative station checking and optional queue tracking
+    Unified charging function with equipment discovery and alternative station checking
     
     Args:
         env: SimPy environment
@@ -51,41 +51,64 @@ def charge_at_station_with_queue_tolerance(env, car_id, target_node, target_stat
         print(f"[T={env.now:.1f}] Car {car_id}: Target station {target_station_id} not found")
         return False
     
-    # Check compatibility
-    if not has_compatible_connector([target_station], connector_type):
-        print(f"[T={env.now:.1f}] Car {car_id}: Station incompatible with connector {connector_type}")
-        return False
+    # EQUIPMENT DISCOVERY PHASE - Check if target station has working compatible connections
+    working_connections = target_station.get_working_connections(connector_type)
+    chosen_station = None
     
-    current_soc = driver.get_state_of_charge()
+    if not working_connections:
+        print(f"[T={env.now:.1f}] Car {car_id}: Discovered target station {target_station_id} has no working compatible connections!")
+        
+        # Check for working alternatives at same node
+        alternative_working_stations = []
+        for station in stations:
+            if station != target_station:
+                station_working_connections = station.get_working_connections(connector_type)
+                if station_working_connections:
+                    queue_length = len(station.simpy_resource.queue) if hasattr(station, 'simpy_resource') else 0
+                    estimated_wait = calculate_queue_wait_time(station, connector_type)
+                    if estimated_wait <= 30:  # Only consider stations with queue <= 30 mins
+                        alternative_working_stations.append((station, estimated_wait))
+        
+        if not alternative_working_stations:
+            print(f"[T={env.now:.1f}] Car {car_id}: No working alternatives at node with acceptable queue times")
+            return False
+        else:
+            # Switch to best working alternative
+            best_alternative = min(alternative_working_stations, key=lambda x: x[1])
+            chosen_station = best_alternative[0]
+            print(f"[T={env.now:.1f}] Car {car_id}: Switched to working alternative {chosen_station.get_station_id()}")
+            stats['alternative_station_switches'] += 1
+    else:
+        # Target station has working connections
+        chosen_station = target_station
+        print(f"[T={env.now:.1f}] Car {car_id}: Target station has working compatible connections")
     
-    # Check current conditions at target station
-    current_queue = len(target_station.simpy_resource.queue) if hasattr(target_station, 'simpy_resource') else 0
-    estimated_wait = calculate_queue_wait_time(target_station, connector_type) 
+    # Check current conditions at chosen station
+    current_queue = len(chosen_station.simpy_resource.queue) if hasattr(chosen_station, 'simpy_resource') else 0
+    estimated_wait = calculate_queue_wait_time(chosen_station, connector_type) 
     
-    print(f"[T={env.now:.1f}] Car {car_id}: Queue at target: {current_queue} cars, estimated wait: {estimated_wait:.1f} min")
+    print(f"[T={env.now:.1f}] Car {car_id}: Queue at chosen station: {current_queue} cars, estimated wait: {estimated_wait:.1f} min")
     
-    chosen_station = target_station
-    
-    # ALTERNATIVE STATION CHECKING: Look for better alternatives at same node
+    # ALTERNATIVE STATION CHECKING: Look for better alternatives at same node if wait is long
     if estimated_wait > 60:  # Check alternatives if wait > 1 hour
         print(f"[T={env.now:.1f}] Car {car_id}: Checking alternatives (long estimated wait: {estimated_wait:.1f} min)")
         
         alternative_options = []
         for station in stations:
-            if (station != target_station and 
-                has_compatible_connector([station], connector_type)):
-                
-                alt_queue_len = len(station.simpy_resource.queue) if hasattr(station, 'simpy_resource') else 0
-                alt_wait_time = calculate_queue_wait_time(station, connector_type)
-                alt_power = get_station_max_power(station, connector_type)
-                
-                # Score this alternative
-                score = 1000
-                score -= alt_queue_len * 50  # Penalty for queue length
-                score += alt_power * 2       # Bonus for higher power
-                
-                alternative_options.append((station, score, alt_queue_len, alt_wait_time, alt_power))
-                print(f"[T={env.now:.1f}] Car {car_id}: Alternative {station.get_station_id()}: {alt_queue_len} cars, {alt_wait_time:.1f} min, {alt_power}kW, score={score}")
+            if station != chosen_station:
+                station_working_connections = station.get_working_connections(connector_type)
+                if station_working_connections:
+                    alt_queue_len = len(station.simpy_resource.queue) if hasattr(station, 'simpy_resource') else 0
+                    alt_wait_time = calculate_queue_wait_time(station, connector_type)
+                    alt_power = get_station_max_power(station, connector_type)
+                    
+                    # Score this alternative
+                    score = 1000
+                    score -= alt_queue_len * 50  # Penalty for queue length
+                    score += alt_power * 2       # Bonus for higher power
+                    
+                    alternative_options.append((station, score, alt_queue_len, alt_wait_time, alt_power))
+                    print(f"[T={env.now:.1f}] Car {car_id}: Alternative {station.get_station_id()}: {alt_queue_len} cars, {alt_wait_time:.1f} min, {alt_power}kW, score={score}")
         
         if alternative_options:
             # Sort by score (highest first)
@@ -102,7 +125,7 @@ def charge_at_station_with_queue_tolerance(env, car_id, target_node, target_stat
             else:
                 print(f"[T={env.now:.1f}] Car {car_id}: No significantly better alternatives, staying with original choice")
         else:
-            print(f"[T={env.now:.1f}] Car {car_id}: No alternative stations available")
+            print(f"[T={env.now:.1f}] Car {car_id}: No alternative working stations available")
     
     # Proceed with charging at chosen station
     station_id = chosen_station.get_station_id()

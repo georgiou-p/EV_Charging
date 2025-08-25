@@ -176,16 +176,23 @@ class QueueTimeTracker:
     
     def record_queue_time(self, simulation_time, queue_time_minutes):
         queue_start_time = simulation_time - queue_time_minutes
-    
-        if simulation_time >= 1440:
-            print(f"DEBUG: Ignoring late completion - started: {queue_start_time:.1f}, ended: {simulation_time:.1f}, duration: {queue_time_minutes:.1f}")
-            return
-    
-        if queue_start_time >= 1380:  # Last hour
-            print(f"DEBUG: T24 event - started: {queue_start_time:.1f}, ended: {simulation_time:.1f}, duration: {queue_time_minutes:.1f}")
+        queue_end_time = simulation_time
 
-        hour_idx = self._get_hour_index(simulation_time)
+        # Only filter out events that actually end after 24:00 (minute 1440)
+        if queue_end_time >= 1440:
+            print(f"DEBUG: Ignoring queue ending after T24 - started: {queue_start_time:.1f}, ended: {queue_end_time:.1f}, duration: {queue_time_minutes:.1f}")
+            return
+        # Optionally: Also filter events that started before simulation began (negative start time)
+        if queue_start_time < 0:
+            print(f"DEBUG: Ignoring queue starting before simulation - started: {queue_start_time:.1f}, ended: {queue_end_time:.1f}, duration: {queue_time_minutes:.1f}")
+            return
+        # Record the queue time in the appropriate hour based on when it ended
+        hour_idx = self._get_hour_index(queue_end_time)
         self.hourly_queue_times[hour_idx].append(queue_time_minutes)
+
+        if queue_end_time >= 1380:  # Debug T24 events
+            print(f"DEBUG: Recording T24 queue event - started: {queue_start_time:.1f}, ended: {queue_end_time:.1f}, duration: {queue_time_minutes:.1f}")
+    
     
     def record_driver_count(self, simulation_time, active_drivers):
         """Record active driver count for the appropriate hour"""

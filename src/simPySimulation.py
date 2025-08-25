@@ -4,9 +4,9 @@ import networkx as nx
 import numpy as np
 from station_assignment import assign_charging_stations_to_nodes
 from evDriver import EVDriver
-from pathfinding import (find_nearest_charging_station, travel_to_charging_station,travel_to_next_node)
+from pathfinding import (find_nearest_charging_station, travel_to_charging_station, travel_to_next_node, get_station_max_power)
 from charging_utils import charge_at_station_with_queue_tolerance, setup_charging_resources
-from queue_time_tracker import QueueTimeTracker  # Import the tracker
+from queue_time_tracker import QueueTimeTracker
 
 class SimpleEVSimulation:
     def __init__(self, graph, simulation_time=None):
@@ -36,7 +36,7 @@ class SimpleEVSimulation:
             'queue_times': [],
             'total_queue_time': 0,
             'queue_length': [],
-            'queue_abandonments': 0,  # Track queue abandonments
+            'queue_abandonments': 0,
             'alternative_station_switches': 0
         }
     
@@ -47,7 +47,6 @@ class SimpleEVSimulation:
     
     def record_queue_event(self, queue_time_minutes, queue_start_time=None):
         """Record a queue time event for hourly tracking"""
-        # Use start time if provided, otherwise current time (for backward compatibility)
         record_time = queue_start_time if queue_start_time is not None else self.env.now
         self.queue_tracker.record_queue_time(record_time, queue_time_minutes)
     
@@ -64,12 +63,12 @@ class SimpleEVSimulation:
         """Update both driver count and SoC sampling"""
         current_time = self.env.now
         
-        # Existing driver count update
+        # Driver count update
         if self.queue_tracker.should_sample_driver_count(current_time):
             active_count = len(self.active_drivers)
             self.queue_tracker.record_driver_count(current_time, active_count)
         
-        # NEW: SoC sampling
+        # SoC sampling
         if self.queue_tracker.should_sample_soc(current_time):
             if self.active_drivers:
                 total_soc = sum(driver.get_state_of_charge() for driver in self.active_drivers.values())
@@ -97,7 +96,7 @@ class SimpleEVSimulation:
         # Update driver count when car starts
         self.update_driver_count_and_soc()
         
-        #--------------------MAIN JOURNEY LOOP-----------------------------------------------------------------------------------------------------------------------
+        # Main journey loop
         loop_counter = 0
         max_loops = len(path) * 2  # Safety limit to prevent infinite loops
         
@@ -106,7 +105,7 @@ class SimpleEVSimulation:
             current_node = driver.get_current_node()
             
             # Periodically update driver count
-            if loop_counter % 5 == 0:  # Every 5 loop iterations
+            if loop_counter % 5 == 0:
                 self.update_driver_count_and_soc()
             
             # Check if we can make the next move
@@ -118,7 +117,7 @@ class SimpleEVSimulation:
                     self.stats['cars_stranded'] += 1
                     self.unregister_active_driver(car_id)
                     return
-                continue  # Restart loop after charging
+                continue
             
             # Check if driver needs charging based on personal threshold
             needs_charging, current_range, deficit, reason = driver.needs_charging_for_journey(self.graph)
@@ -133,13 +132,12 @@ class SimpleEVSimulation:
                     return
                 continue  # Restart loop after charging
             else:
-                # Log the reason for not charging
                 print(f"[T={self.env.now:.1f}] Car {car_id}: {reason} - continuing journey")
             
             # Travel to next node
             yield from travel_to_next_node(self.env, car_id, driver, self.graph, travel_time_per_km=0.75)
             
-            # Check if we've somehow run out of battery 
+            # Check if battery is empty
             if driver.is_battery_empty():
                 print(f"[T={self.env.now:.1f}] Car {car_id}: STRANDED! Battery empty at node {driver.get_current_node()}")
                 self.stats['cars_stranded'] += 1
@@ -155,7 +153,6 @@ class SimpleEVSimulation:
         # Journey completed
         print(f"[T={self.env.now:.1f}] Car {car_id}: Reached destination {destination_node}!")
         self.stats['cars_completed'] += 1
-
         self.unregister_active_driver(car_id)
         
         # Update driver count when car completes
@@ -163,7 +160,7 @@ class SimpleEVSimulation:
     
     def _handle_charging_stop(self, car_id, driver):
         """
-        Charging process using unified charging function
+        Charging process with equipment discovery retry logic
         """
         current_node = driver.get_current_node()
         current_range_km = driver.get_range_remaining()
@@ -173,31 +170,19 @@ class SimpleEVSimulation:
 
         print(f"[T={self.env.now:.1f}] Car {car_id}: Need charging, looking for best station within {current_range_km:.1f}km range")
 
-        # Step 1: Find best station within reach
+        # Find best station within reach
         result = find_nearest_charging_station(
             self.graph, current_node, planned_route, current_range_km, connector_type
         )
 
         if result == (None, None):
             print(f"[T={self.env.now:.1f}] Car {car_id}: No charging stations within range!")
-
-            # Last resort: try nearby search with current range
-            if current_range_km > 5:
-                print(f"[T={self.env.now:.1f}] Car {car_id}: Attempting last-resort nearby search")
-                success = yield from self._search_and_travel_to_nearby_charging(car_id, driver)
-                if success:
-                    # After charging, recalculate path
-                    charging_location = driver.get_current_node()
-                    driver.set_source_node(charging_location)
-                    new_path = driver.find_shortest_path(self.graph)
-                    return new_path is not None
-
             return False
 
         target_node, target_station_id = result
         print(f"[T={self.env.now:.1f}] Car {car_id}: Selected charging station {target_station_id} at node {target_node}")
 
-        # Step 2: Travel to target node if needed
+        # Travel to target node if needed
         if target_node != current_node:
             print(f"[T={self.env.now:.1f}] Car {car_id}: Traveling to charging station at node {target_node}")
             travel_success = yield from travel_to_charging_station(
@@ -209,25 +194,54 @@ class SimpleEVSimulation:
         else:
             print(f"[T={self.env.now:.1f}] Car {car_id}: Charging station is at current location")
 
-        # Step 3: Try to charge 
+        # Try to charge
         charging_success = yield from charge_at_station_with_queue_tolerance(
             self.env, car_id, target_node, target_station_id, self.graph, self.stats, driver, 
-            simulation=self  # Pass simulation for queue tracking
+            simulation=self
         )
 
-        # Step 4: Handle charging failure with nearby search
+        # Handle charging failure with equipment discovery retry
         if not charging_success:
-            print(f"[T={self.env.now:.1f}] Car {car_id}: Charging failed at node {target_node}")
-
-            # Try one more nearby search if we still have range
+            print(f"[T={self.env.now:.1f}] Car {car_id}: Charging failed at node {target_node} - equipment not working or unavailable")
+            
+            # Retry finding a new charging station
             remaining_range = driver.get_range_remaining()
-            if remaining_range > 10:
-                print(f"[T={self.env.now:.1f}] Car {car_id}: Attempting alternative nearby search after charging failure")
-                alternative_success = yield from self._search_and_travel_to_nearby_charging(car_id, driver)
-                if alternative_success:
-                    charging_success = True
+            if remaining_range > 15:
+                print(f"[T={self.env.now:.1f}] Car {car_id}: Retrying charging station search due to equipment failure")
+                
+                retry_result = find_nearest_charging_station(
+                    self.graph, driver.get_current_node(), driver.get_current_path(), 
+                    remaining_range, connector_type
+                )
+                
+                if retry_result != (None, None):
+                    retry_node, retry_station_id = retry_result
+                    print(f"[T={self.env.now:.1f}] Car {car_id}: Found alternative station {retry_station_id} at node {retry_node}")
+                    
+                    # Travel to new station if needed
+                    if retry_node != driver.get_current_node():
+                        travel_success = yield from travel_to_charging_station(
+                            self.env, car_id, driver.get_current_node(), retry_node, self.graph, driver
+                        )
+                        if not travel_success:
+                            print(f"[T={self.env.now:.1f}] Car {car_id}: Failed to reach retry station!")
+                            return False
+                    
+                    # Try charging at retry station
+                    retry_success = yield from charge_at_station_with_queue_tolerance(
+                        self.env, car_id, retry_node, retry_station_id, self.graph, self.stats, driver, 
+                        simulation=self
+                    )
+                    
+                    if retry_success:
+                        charging_success = True
+                        print(f"[T={self.env.now:.1f}] Car {car_id}: Successfully charged at retry station")
+                else:
+                    print(f"[T={self.env.now:.1f}] Car {car_id}: No alternative charging stations found within range")
+            else:
+                print(f"[T={self.env.now:.1f}] Car {car_id}: Insufficient range ({remaining_range:.1f}km) for retry search")
 
-        # Step 5: Recalculate path from charging location to destination
+        # Recalculate path from charging location to destination
         if charging_success:
             current_location = driver.get_current_node()
             print(f"[T={self.env.now:.1f}] Car {car_id}: Charging complete, recalculating route from {current_location} to {destination_node}")
@@ -246,7 +260,7 @@ class SimpleEVSimulation:
         
     def _charge_at_current_location(self, car_id, driver, current_node):
         """
-        Enhanced charging at current location using unified charging function
+        Enhanced charging at current location with equipment discovery
         """
         stations = self.graph.nodes[current_node]['charging_stations']
         connector_type = driver.get_connector_type()
@@ -255,61 +269,88 @@ class SimpleEVSimulation:
         # Case 1: No charging stations at current node
         if not stations:
             print(f"[T={self.env.now:.1f}] Car {car_id}: No charging stations at current node {current_node}")
-
-            # Search nearby nodes if we have enough range
             if remaining_range > 5:
                 print(f"[T={self.env.now:.1f}] Car {car_id}: Searching for charging stations in nearby nodes (range: {remaining_range:.1f}km)")
-                success = yield from self._search_and_travel_to_nearby_charging(car_id, driver)
-                return success
+                
+                result = find_nearest_charging_station(
+                    self.graph, current_node, driver.get_current_path(), 
+                    remaining_range, connector_type
+                )
+                
+                if result != (None, None):
+                    alt_node, alt_station_id = result
+                    print(f"[T={self.env.now:.1f}] Car {car_id}: Found alternative station {alt_station_id} at node {alt_node}")
+                    
+                    travel_success = yield from travel_to_charging_station(
+                        self.env, car_id, current_node, alt_node, self.graph, driver
+                    )
+                    if travel_success:
+                        return (yield from charge_at_station_with_queue_tolerance(
+                            self.env, car_id, alt_node, alt_station_id, self.graph, self.stats, driver,
+                            simulation=self
+                        ))
+                
+                print(f"[T={self.env.now:.1f}] Car {car_id}: No alternative stations found")
             else:
-               print(f"[T={self.env.now:.1f}] Car {car_id}: Insufficient range ({remaining_range:.1f}km) to search nearby nodes")
-               return False
-    
-        from charging_utils import has_compatible_connector
+                print(f"[T={self.env.now:.1f}] Car {car_id}: Insufficient range ({remaining_range:.1f}km) to search nearby nodes")
+            return False
 
-        # Case 2: Stations exist but none are compatible
-        if not has_compatible_connector(stations, connector_type):
-            print(f"[T={self.env.now:.1f}] Car {car_id}: No compatible charging stations at node {current_node} for connector {connector_type}")
-        
-            # Search nearby nodes for compatible stations if we have enough range
-            if remaining_range > 5:
-                print(f"[T={self.env.now:.1f}] Car {car_id}: Searching for compatible stations in nearby nodes (range: {remaining_range:.1f}km)")
-                success = yield from self._search_and_travel_to_nearby_charging(car_id, driver)
-                if success:
-                    return True
-                else:
-                    print(f"[T={self.env.now:.1f}] Car {car_id}: No compatible stations found within range")
+        # Case 2: Check if any stations have working compatible connections
+        stations_with_working_connections = []
+        for station in stations:
+            working_connections = station.get_working_connections(connector_type)
+            if working_connections:
+                stations_with_working_connections.append(station)
+
+        if not stations_with_working_connections:
+            print(f"[T={self.env.now:.1f}] Car {car_id}: No working compatible charging stations at node {current_node}")
+            
+            if remaining_range > 10:
+                print(f"[T={self.env.now:.1f}] Car {car_id}: Searching for working compatible stations in nearby nodes (range: {remaining_range:.1f}km)")
+                
+                result = find_nearest_charging_station(
+                    self.graph, current_node, driver.get_current_path(), 
+                    remaining_range, connector_type
+                )
+                
+                if result != (None, None):
+                    alt_node, alt_station_id = result
+                    travel_success = yield from travel_to_charging_station(
+                        self.env, car_id, current_node, alt_node, self.graph, driver
+                    )
+                    if travel_success:
+                        return (yield from charge_at_station_with_queue_tolerance(
+                            self.env, car_id, alt_node, alt_station_id, self.graph, self.stats, driver,
+                            simulation=self
+                        ))
             else:
-                print(f"[T={self.env.now:.1f}] Car {car_id}: Insufficient range to search for compatible stations elsewhere")
+                print(f"[T={self.env.now:.1f}] Car {car_id}: Insufficient range to search for compatible working stations elsewhere")
 
             self.stats['connector_incompatibility_failures'] += 1
             return False
 
-        # Case 3: Compatible stations exist at current node
-        print(f"[T={self.env.now:.1f}] Car {car_id}: Found compatible stations at current node")
+        # Case 3: Working compatible stations exist at current node
+        print(f"[T={self.env.now:.1f}] Car {car_id}: Found {len(stations_with_working_connections)} working compatible stations at current node")
 
-        # Find the best station at current location
-        from pathfinding import get_station_max_power
+        # Find the best working station at current location
         compatible_stations = []
-        for station in stations:
-            if has_compatible_connector([station], connector_type):
-                # Score this station
-                score = 1000
-                queue_length = len(station.simpy_resource.queue) if hasattr(station, 'simpy_resource') else 0
-                estimated_wait_time = queue_length * 10
-                score -= estimated_wait_time * 10
+        for station in stations_with_working_connections:
+            score = 1000
+            queue_length = len(station.simpy_resource.queue) if hasattr(station, 'simpy_resource') else 0
+            estimated_wait_time = queue_length * 10
+            score -= estimated_wait_time * 10
 
-                max_power = get_station_max_power(station, connector_type)
-                if max_power >= 150:
-                    score += 200
-                elif max_power >= 50:
-                    score += 100
-                elif max_power >= 22:
-                    score += 50
-                else:
-                    score += 20
+            max_power = get_station_max_power(station, connector_type)
+            if max_power >= 150:
+                score += 200
+            elif max_power >= 50:
+                score += 100
+            elif max_power >= 22:
+                score += 50
+            else:
+                score += 20
 
-                compatible_stations.append((station, score))
+            compatible_stations.append((station, score))
 
         if not compatible_stations:
             return False
@@ -322,16 +363,13 @@ class SimpleEVSimulation:
 
         best_station = random.choices(stations_list, weights=probabilities)[0]
         best_station_id = best_station.get_station_id()
-        print(f"[T={self.env.now:.1f}] Car {car_id}: Selected best station at current location: {best_station_id}")
+        print(f"[T={self.env.now:.1f}] Car {car_id}: Selected best working station at current location: {best_station_id}")
 
-        # Use the unified charging function WITH TRACKING
-        from charging_utils import charge_at_station_with_queue_tolerance
-        charging_success = yield from charge_at_station_with_queue_tolerance(
+        # Use the unified charging function
+        return (yield from charge_at_station_with_queue_tolerance(
             self.env, car_id, current_node, best_station_id, self.graph, self.stats, driver,
-            simulation=self  # Pass simulation for queue tracking
-        )
-
-        return charging_success
+            simulation=self
+        ))
 
     
     def spawn_multiple_cars(self, total_cars, simulation_duration_hours=24):
@@ -340,30 +378,8 @@ class SimpleEVSimulation:
         """
         # Hourly charging demand distribution (T1-T24)
         hourly_distribution = [
-            0.4,  # T1  (00:00–01:00)
-            0.3,  # T2  (01:00–02:00)
-            0.3,  # T3  (02:00–03:00)
-            1.0,  # T4  (03:00–04:00)
-            3.0,  # T5  (04:00–05:00)
-            6.0,  # T6  (05:00–06:00)
-            9.5,  # T7  (06:00–07:00)
-            11.0, # T8  (07:00–08:00)
-            12.5, # T9  (08:00–09:00) ← peak
-            11.8, # T10 (09:00–10:00)
-            8.8,  # T11 (10:00–11:00)
-            7.2,  # T12 (11:00–12:00)
-            6.0,  # T13 (12:00–13:00)
-            5.0,  # T14 (13:00–14:00)
-            4.0,  # T15 (14:00–15:00)
-            3.0,  # T16 (15:00–16:00)
-            2.9,  # T17 (16:00–17:00)
-            2.5,  # T18 (17:00–18:00)
-            1.8,  # T19 (18:00–19:00)
-            1.2,  # T20 (19:00–20:00)
-            0.7,  # T21 (20:00–21:00)
-            0.5,  # T22 (21:00–22:00)
-            0.3,  # T23 (22:00–23:00)
-            0.3   # T24 (23:00–00:00)
+            0.4, 0.3, 0.3, 1.0, 3.0, 6.0, 9.5, 11.0, 12.5, 11.8, 8.8, 7.2,
+            6.0, 5.0, 4.0, 3.0, 2.9, 2.5, 1.8, 1.2, 0.7, 0.5, 0.3, 0.3
         ]
         
         # Convert simulation hours to simulation time units (assuming 1 hour = 60 time units)
@@ -478,7 +494,7 @@ class SimpleEVSimulation:
         print(f"Graph has {len(self.graph.nodes)} nodes")
         
         # Spawn cars with hourly demand distribution
-        self.env.process(self.spawn_multiple_cars(total_cars=10000, simulation_duration_hours=24)) #CARSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS
+        self.env.process(self.spawn_multiple_cars(total_cars=10000, simulation_duration_hours=24)) #CARSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS
         
         # Run simulation
         if self.simulation_time:
@@ -486,7 +502,7 @@ class SimpleEVSimulation:
             self.env.run(until=self.simulation_time)
         else:
             print(f"\n--- Running simulation until completion ---")
-            self.env.run()  # Run for 24 hours
+            self.env.run(until=1440) # Run for 24 hrs
         
         # Print final statistics
         print("\n=== Simulation Complete ===")
@@ -524,14 +540,11 @@ class SimpleEVSimulation:
                 abandonment_rate = (self.stats['queue_abandonments'] / self.stats['cars_spawned']) * 100
                 print(f"Queue abandonment rate: {abandonment_rate:.1f}%")
 
-        
-
-        # ENHANCED: Print hourly queue analysis and create plots
+        # Hourly queue time analysis
         print("\n" + "="*60)
         print("HOURLY QUEUE TIME ANALYSIS")
         print("="*60)
         
-        # Print detailed hourly summary
         self.queue_tracker.print_hourly_summary()
         
         # Create the visualization
@@ -543,7 +556,6 @@ class SimpleEVSimulation:
         
         # Print SoC summary
         (hours, avg_soc, std_soc, median_soc, q1_soc, q3_soc, counts) = self.queue_tracker.calculate_hourly_soc_statistics()
-        # Print SoC summary
         print(f"SoC Statistics:")
         for i in range(24):
             if counts[i] > 0:
@@ -558,10 +570,10 @@ def main():
     
     # Load data
     geojson_path = "data/UK_Mainland_GB_simplified.geojson"
-    stations_json_path = "data/cleaned_charging_stations.json"
+    stations_json_path = "data/TargetedWeightedFailures.json"
     
-    #random.seed(1)
-    #np.random.seed(1)
+    random.seed(1)
+    np.random.seed(1)
     try:
         graph, node_stations = assign_charging_stations_to_nodes(
             geojson_path, 
@@ -578,7 +590,7 @@ def main():
         simulation = SimpleEVSimulation(graph, simulation_time=None)
         queue_tracker = simulation.run_simulation()
         
-        # You can also access the raw data if needed
+        # Access raw data if needed
         hours, avg_queue, q1_queue, q3_queue, avg_drivers, counts = queue_tracker.calculate_hourly_statistics()
         print(f"\nRaw data available for further analysis:")
         print(f"Hours: {len(hours)} data points")

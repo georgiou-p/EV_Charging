@@ -4,12 +4,13 @@ from collections import deque
 
 class Connection:
     def __init__(self, power_kw: float, connection_type_id: int = None, 
-                 amps: float = None, voltage: float = None, quantity: int = 1):
+                 amps: float = None, voltage: float = None, quantity: int = 1, working: bool = True):
         self.power_kw = power_kw
         self.connection_type_id = connection_type_id
         self.amps = amps
         self.voltage = voltage
         self.quantity = quantity
+        self.working = working
 
     def __str__(self):
         return f"Connection(Power: {self.power_kw}kW, Type: {self.connection_type_id}, Amps: {self.amps}, Voltage: {self.voltage}, Qty: {self.quantity})"
@@ -78,6 +79,21 @@ class EVChargingStation:
         """Get the current length of the charging queue"""
         return len(self.charging_queue)
     
+    def is_connection_working(self, connection_index):
+        """Check if a specific connection is working"""
+        if 0 <= connection_index < len(self.connections):
+            return self.connections[connection_index].working
+        return False
+
+    def get_working_connections(self, connector_type=None):
+        """Get all working connections, optionally filtered by connector type"""
+        working_connections = []
+        for connection in self.connections:
+            if hasattr(connection, 'working') and connection.working:
+                if connector_type is None or connection.connection_type_id == connector_type or connection.connection_type_id == 0:
+                    working_connections.append(connection)
+        return working_connections
+    
     @classmethod
     def from_json(cls, json_data: Dict[str, Any]):
         """Create EVChargingStation from JSON data"""
@@ -87,7 +103,8 @@ class EVChargingStation:
                 connection_type_id=conn.get('ConnectionTypeID'),
                 amps=conn.get('Amps'),
                 voltage=conn.get('Voltage'),
-                quantity=conn.get('Quantity', 1)
+                quantity=conn.get('Quantity', 1),
+                working=conn.get('Working', True)
             )
             for conn in json_data.get('Connections', [])
         ]
@@ -124,3 +141,4 @@ def load_stations_from_json(json_file_path: str) -> List[EVChargingStation]:
             print(f"Error loading station {station_data.get('ID', 'unknown')}: {e}")
     
     return stations
+
