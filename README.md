@@ -25,6 +25,8 @@ A Python-based simulation framework for analyzing the resilience of electric veh
 - **`pathfinding.py`** - Navigation algorithms for finding nearest charging stations and route planning
 - **`queue_time_tracker.py`** - Tracks and analyzes charging queue times throughout simulation periods
 - **`visualization.py`** - Creates network visualizations showing charging stations and road network
+- **`multiRunAnalyzer.py`** - Analyzes and compares results across multiple simulation runs for statistical validation
+- **`charging_station.py`** - Defines the charging station class with connection types, power levels, and operational status
 
 ## Helper Scripts (`helpers/`)
 
