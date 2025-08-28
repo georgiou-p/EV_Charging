@@ -287,24 +287,20 @@ class MultiRunAnalyzer:
         ax2 = ax1.twinx()
 
         x = np.array(hourly_stats['hours'])
-        # CHANGED: Use median instead of mean
+        #Use median instead of mean
         median_queue = np.array(hourly_stats['median_queue_times'])  # Use median instead of avg
         q1_queue = np.array(hourly_stats['q1_queue_times'])
         q3_queue = np.array(hourly_stats['q3_queue_times'])
         avg_drivers = np.array(hourly_stats['avg_driver_counts'])
         std_drivers = np.array(hourly_stats['std_driver_counts'])
 
-        # Plot queue times - CHANGED: median instead of mean
+        # Plot queue times
         ax1.fill_between(x, q1_queue, q3_queue, alpha=0.3, color='lightcoral', 
                         label='Interquartile Range (Q1-Q3)')
-        # CHANGED: Plot median as the main line
+        #  Plot median as the main line
         ax1.plot(x, median_queue, color='darkred', linewidth=3, marker='o', 
-                markersize=6, label='Median Queue Time')  # Changed from 'Mean' to 'Median'
-
-        # Optional: Remove the redundant median line since it's now the main line
-        # ax1.plot(x, median_queue, color='red', linewidth=2, linestyle='--', 
-        #         alpha=0.8, label='Median Queue Time')
-
+                markersize=6, label='Median Queue Time')  
+        
         # Plot driver counts with error bars (keep as is)
         ax2.errorbar(x, avg_drivers, yerr=std_drivers, color='steelblue', 
                     linewidth=2, marker='s', markersize=4, alpha=0.8, 
@@ -313,7 +309,6 @@ class MultiRunAnalyzer:
         # Customize main plot
         ax1.set_xlabel('Time of Day (T1–T24)', fontsize=14, fontweight='bold')
         ax1.set_ylabel('Queue Time (minutes)', fontsize=14, fontweight='bold', color='darkred')
-        # CHANGED: Update title to reflect median
         ax1.set_title('Combined Results: Median Queue Times & Active Drivers (Multiple Runs)', 
                      fontsize=16, fontweight='bold', pad=20)
         ax1.tick_params(axis='y', labelcolor='darkred')
@@ -321,7 +316,6 @@ class MultiRunAnalyzer:
         ax2.set_ylabel('Number of Active Drivers', fontsize=14, fontweight='bold', color='steelblue')
         ax2.tick_params(axis='y', labelcolor='steelblue')
 
-        # FIXED: Set x-axis ticks properly
         ax1.set_xticks(x[::2])  # Every 2 hours to avoid crowding
         ax1.set_xticklabels([f'{i-1:02d}:00' for i in x[::2]], rotation=45)
 

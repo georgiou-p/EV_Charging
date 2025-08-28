@@ -88,7 +88,7 @@ def visualize_complete_graph(graph, map_regions_path=None, figsize=(20, 15)):
     # Get positions
     positions = {node: graph.nodes[node]['position'] for node in graph.nodes}
     
-    # Get ALL edge weights
+    # Get edge weights
     all_edges_with_weights = []
     for edge in graph.edges(data=True):
         if 'weight' in edge[2]:
@@ -133,7 +133,7 @@ def visualize_complete_graph(graph, map_regions_path=None, figsize=(20, 15)):
     # Store node collections for hover functionality
     node_artists = {}
     
-    # Draw nodes WITHOUT charging stations (smaller, blue)
+    # Draw nodes witout charging stations
     if nodes_without_stations:
         scatter_no_stations = ax.scatter([positions[node][0] for node in nodes_without_stations],
                                         [positions[node][1] for node in nodes_without_stations],
@@ -143,7 +143,7 @@ def visualize_complete_graph(graph, map_regions_path=None, figsize=(20, 15)):
         for i, node in enumerate(nodes_without_stations):
             node_artists[node] = {'artist': scatter_no_stations, 'index': i, 'has_stations': False}
     
-    # Draw nodes WITH charging stations (larger, red, sized by station count)
+    # Draw nodes with charging stations
     if nodes_with_stations:
         max_stations = max(station_counts) if station_counts else 1
         # Scale node sizes based on number of stations
@@ -159,11 +159,9 @@ def visualize_complete_graph(graph, map_regions_path=None, figsize=(20, 15)):
         for i, node in enumerate(nodes_with_stations):
             node_artists[node] = {'artist': scatter_stations, 'index': i, 'has_stations': True, 'station_count': station_counts[i]}
         
-        # Add colorbar for charging stations
         cbar_stations = plt.colorbar(scatter_stations, ax=ax, shrink=0.6, pad=0.12)
         cbar_stations.set_label('Number of Charging Stations', rotation=270, labelpad=20)
     
-    # LABEL ALL POSSIBLE EDGES with weights
     print("Attempting to label ALL edges where space permits...")
     
     successful_labels = 0
@@ -186,7 +184,6 @@ def visualize_complete_graph(graph, map_regions_path=None, figsize=(20, 15)):
         if edge_length == 0:
             continue
         
-        # Try multiple positions for this edge
         found_position = False
         
         # Try different positions along the edge
@@ -357,179 +354,6 @@ def print_assignment_summary(graph):
 import matplotlib.pyplot as plt
 import numpy as np
 
-def plot_anxiety_T_profile(mean_T, std_T, driver_count_T=None, title="EV Driver Anxiety Throughout the Day"):
-    """
-    Plot shaded line graph of driver anxiety throughout the day (T1-T24) with optional driver count
-    
-    Args:
-        mean_T: List of 24 mean anxiety values (one per hour T1-T24)
-        std_T: List of 24 standard deviation values (one per hour T1-T24)
-        driver_count_T: Optional list of 24 average driver counts (one per hour T1-T24)
-        title: Plot title
-    """
-    # Validate input
-    assert len(mean_T) == 24, f"Expected 24 mean values, got {len(mean_T)}"
-    assert len(std_T) == 24, f"Expected 24 std values, got {len(std_T)}"
-    if driver_count_T is not None:
-        assert len(driver_count_T) == 24, f"Expected 24 driver count values, got {len(driver_count_T)}"
-    
-    # Convert to numpy arrays for easier manipulation
-    mean_T = np.array(mean_T)
-    std_T = np.array(std_T)
-    
-    # Create x-axis values (T1 to T24)
-    x = np.arange(1, 25)  # 1, 2, 3, ..., 24
-    
-    # Calculate confidence bands (mean ± 1σ), clipped to [0, 1]
-    upper_band = np.clip(mean_T + std_T, 0, 1)
-    lower_band = np.clip(mean_T - std_T, 0, 1)
-    
-    # Create the plot with dual y-axes if driver count is provided
-    if driver_count_T is not None:
-        fig, ax1 = plt.subplots(figsize=(16, 8))
-        ax2 = ax1.twinx()  # Create second y-axis
-        driver_count_T = np.array(driver_count_T)
-    else:
-        fig, ax1 = plt.subplots(figsize=(14, 8))
-        ax2 = None
-    
-    # Plot the shaded confidence band first (so it appears behind the line)
-    ax1.fill_between(x, lower_band, upper_band, 
-                    alpha=0.3, color='lightcoral', 
-                    label='±1σ confidence band')
-    
-    # Plot the mean anxiety line
-    line1 = ax1.plot(x, mean_T, 
-                    color='darkred', linewidth=2.5, 
-                    marker='o', markersize=4,
-                    label='Mean anxiety')
-    
-    # Plot driver count if provided
-    if driver_count_T is not None and ax2 is not None:
-        line2 = ax2.plot(x, driver_count_T,
-                        color='steelblue', linewidth=2.0,
-                        marker='s', markersize=3,
-                        linestyle='--', alpha=0.8,
-                        label='Active drivers')
-        
-        # Customize second y-axis
-        ax2.set_ylabel('Number of Active Drivers', fontsize=12, fontweight='bold', color='steelblue')
-        ax2.tick_params(axis='y', labelcolor='steelblue')
-        
-        # Set reasonable limits for driver count
-        if np.max(driver_count_T) > 0:
-            ax2.set_ylim(0, np.max(driver_count_T) * 1.1)
-    
-    # Customize the primary plot (anxiety)
-    ax1.set_xlabel('Time of Day (T1–T24)', fontsize=12, fontweight='bold')
-    ax1.set_ylabel('Driver Anxiety (0–1)', fontsize=12, fontweight='bold', color='darkred')
-    ax1.set_title(title, fontsize=14, fontweight='bold', pad=20)
-    ax1.tick_params(axis='y', labelcolor='darkred')
-    
-    # Set x-axis ticks and labels
-    ax1.set_xticks(x)
-    ax1.set_xticklabels([f'T{i}' for i in x], rotation=45, ha='right')
-    
-    # Set y-axis limits and add horizontal reference lines
-    ax1.set_ylim(0, 1)
-    ax1.axhline(y=0.5, color='gray', linestyle='--', alpha=0.5, linewidth=1)
-    ax1.axhline(y=0.25, color='gray', linestyle=':', alpha=0.3, linewidth=1)
-    ax1.axhline(y=0.75, color='gray', linestyle=':', alpha=0.3, linewidth=1)
-    
-    # Add grid for better readability
-    ax1.grid(True, alpha=0.3, linestyle='-', linewidth=0.5)
-    
-    # Combine legends from both axes
-    lines1, labels1 = ax1.get_legend_handles_labels()
-    if ax2 is not None:
-        lines2, labels2 = ax2.get_legend_handles_labels()
-        ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper left', fontsize=11, framealpha=0.9)
-    else:
-        ax1.legend(loc='upper right', fontsize=11, framealpha=0.9)
-    
-    # Add annotations for peak and low periods
-    if len(mean_T) > 0:
-        # Find peak anxiety hour
-        peak_hour = np.argmax(mean_T) + 1  # +1 because x starts at 1
-        peak_value = mean_T[peak_hour - 1]
-        
-        # Find lowest anxiety hour (excluding zeros)
-        non_zero_indices = mean_T > 0
-        if np.any(non_zero_indices):
-            low_hour = np.argmin(np.where(non_zero_indices, mean_T, np.inf)) + 1
-            low_value = mean_T[low_hour - 1]
-            
-            # Add annotations
-            if peak_value > 0:
-                ax1.annotate(f'Peak Anxiety: T{peak_hour}\n({peak_value:.3f})',
-                           xy=(peak_hour, peak_value),
-                           xytext=(peak_hour + 2, peak_value + 0.1),
-                           arrowprops=dict(arrowstyle='->', color='darkred', alpha=0.7),
-                           fontsize=10, ha='left',
-                           bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
-            
-            if low_value > 0 and low_hour != peak_hour:
-                ax1.annotate(f'Low Anxiety: T{low_hour}\n({low_value:.3f})',
-                           xy=(low_hour, low_value),
-                           xytext=(low_hour - 2, low_value + 0.1),
-                           arrowprops=dict(arrowstyle='->', color='darkblue', alpha=0.7),
-                           fontsize=10, ha='right',
-                           bbox=dict(boxstyle="round,pad=0.3", facecolor="lightblue", alpha=0.8))
-    
-    # Add driver count peak annotation if available
-    if driver_count_T is not None and np.max(driver_count_T) > 0:
-        peak_driver_hour = np.argmax(driver_count_T) + 1
-        peak_driver_count = driver_count_T[peak_driver_hour - 1]
-        
-        if ax2 is not None:
-            ax2.annotate(f'Peak Drivers: T{peak_driver_hour}\n({peak_driver_count:.0f} active)',
-                        xy=(peak_driver_hour, peak_driver_count),
-                        xytext=(peak_driver_hour - 3, peak_driver_count * 0.9),
-                        arrowprops=dict(arrowstyle='->', color='steelblue', alpha=0.7),
-                        fontsize=9, ha='right', color='steelblue',
-                        bbox=dict(boxstyle="round,pad=0.3", facecolor="lightsteelblue", alpha=0.8))
-    
-    # Add time period labels on x-axis
-    time_labels = ['00:00', '01:00', '02:00', '03:00', '04:00', '05:00',
-                   '06:00', '07:00', '08:00', '09:00', '10:00', '11:00',
-                   '12:00', '13:00', '14:00', '15:00', '16:00', '17:00',
-                   '18:00', '19:00', '20:00', '21:00', '22:00', '23:00']
-    
-    # Add secondary x-axis with hour labels
-    ax3 = ax1.twiny()
-    ax3.set_xlim(ax1.get_xlim())
-    ax3.set_xticks(x[::3])  # Every 3 hours
-    ax3.set_xticklabels([time_labels[i-1] for i in x[::3]], fontsize=9, alpha=0.7)
-    ax3.set_xlabel('Hour of Day', fontsize=10, alpha=0.7)
-    
-    # Adjust layout to prevent label cutoff
-    plt.tight_layout()
-    
-    # Print some statistics
-    total_samples = np.sum([1 for m in mean_T if m > 0])  # Count non-zero hours
-    print(f"\nAnxiety Profile Statistics:")
-    print(f"Hours with data: {total_samples}/24")
-    if total_samples > 0:
-        non_zero_mean = mean_T[mean_T > 0]
-        print(f"Overall average anxiety: {np.mean(non_zero_mean):.4f}")
-        print(f"Peak anxiety: {np.max(mean_T):.4f} at T{np.argmax(mean_T) + 1}")
-        if np.any(mean_T > 0):
-            min_non_zero = np.min(mean_T[mean_T > 0])
-            min_hour = np.argmin(np.where(mean_T > 0, mean_T, np.inf)) + 1
-            print(f"Lowest anxiety: {min_non_zero:.4f} at T{min_hour}")
-    
-    # Print driver count statistics if available
-    if driver_count_T is not None:
-        print(f"\nDriver Count Statistics:")
-        print(f"Peak active drivers: {np.max(driver_count_T):.0f} at T{np.argmax(driver_count_T) + 1}")
-        print(f"Average active drivers: {np.mean(driver_count_T):.1f}")
-        print(f"Driver count range: {np.min(driver_count_T):.0f} - {np.max(driver_count_T):.0f}")
-    
-    # Show the plot
-    plt.show()
-    
-    return fig, (ax1, ax2) if ax2 is not None else (ax1,)
-
 
 def print_anxiety_summary_table(mean_T, std_T, count_T, driver_count_T=None):
     """
@@ -609,8 +433,8 @@ def plot_queue_time_T_profile(queue_mean_T, queue_std_T, driver_count_T=None, ti
     queue_mean_T = np.array(queue_mean_T)
     queue_std_T = np.array(queue_std_T)
     
-    # Create x-axis values (T1 to T24)
-    x = np.arange(1, 25)  # 1, 2, 3, ..., 24
+    # Create x-axis values 
+    x = np.arange(1, 25)  
     
     # Calculate confidence bands (mean ± 1σ), clipped to non-negative values
     upper_band = np.clip(queue_mean_T + queue_std_T, 0, None)
@@ -625,7 +449,7 @@ def plot_queue_time_T_profile(queue_mean_T, queue_std_T, driver_count_T=None, ti
         fig, ax1 = plt.subplots(figsize=(14, 8))
         ax2 = None
     
-    # Plot the shaded confidence band first (so it appears behind the line)
+    # Plot the shaded confidence band first 
     ax1.fill_between(x, lower_band, upper_band, 
                     alpha=0.3, color='lightblue', 
                     label='±1σ confidence band')
@@ -652,7 +476,7 @@ def plot_queue_time_T_profile(queue_mean_T, queue_std_T, driver_count_T=None, ti
         if np.max(driver_count_T) > 0:
             ax2.set_ylim(0, np.max(driver_count_T) * 1.1)
     
-    # Customize the primary plot (queue time)
+    # Customize the primary plot 
     ax1.set_xlabel('Time of Day (T1–T24)', fontsize=12, fontweight='bold')
     ax1.set_ylabel('Average Queue Time (minutes)', fontsize=12, fontweight='bold', color='navy')
     ax1.set_title(title, fontsize=14, fontweight='bold', pad=20)
@@ -839,12 +663,12 @@ def print_queue_summary_table(queue_mean_T, queue_std_T, queue_count_T, driver_c
 
 def plot_anxiety_T_profile(mean_T, std_T, driver_count_T=None, title="EV Driver Anxiety Throughout the Day (Public Charging)"):
     """
-    Plot shaded line graph of driver anxiety throughout the day (T1-T24) with optional driver count
+    Plot shaded line graph of driver anxiety throughout the day  with optional driver count
     
     Args:
-        mean_T: List of 24 mean anxiety values (one per hour T1-T24)
-        std_T: List of 24 standard deviation values (one per hour T1-T24)
-        driver_count_T: Optional list of 24 average driver counts (one per hour T1-T24)
+        mean_T: List of 24 mean anxiety values 
+        std_T: List of 24 standard deviation values 
+        driver_count_T: Optional list of 24 average driver counts 
         title: Plot title
     """
     # Validate input
@@ -857,10 +681,10 @@ def plot_anxiety_T_profile(mean_T, std_T, driver_count_T=None, title="EV Driver 
     mean_T = np.array(mean_T)
     std_T = np.array(std_T)
     
-    # Create x-axis values (T1 to T24)
-    x = np.arange(1, 25)  # 1, 2, 3, ..., 24
+    # Create x-axis values 
+    x = np.arange(1, 25)  
     
-    # Calculate confidence bands (mean ± 1σ), clipped to [0, 1]
+    # Calculate confidence bands 
     upper_band = np.clip(mean_T + std_T, 0, 1)
     lower_band = np.clip(mean_T - std_T, 0, 1)
     

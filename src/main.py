@@ -1,5 +1,5 @@
 from station_assignment import assign_charging_stations_to_nodes
-from visualization import visualize_stations_on_map, print_assignment_summary, visualize_complete_graph
+from visualization import print_assignment_summary, visualize_complete_graph
 
 def main():
     """

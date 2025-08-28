@@ -190,7 +190,6 @@ def create_comparison_map(geojson_path="data/UK_Mainland_GB_simplified.geojson")
         ax = fig.add_subplot(1, 3, i+1, facecolor='black')
         axes.append(ax)
     
-    # Set main title in white with larger font and better positioning
     fig.suptitle('EV Charging Station Failure Scenarios Comparison', 
                 fontsize=18, fontweight='bold', y=0.93, color='white')
     
@@ -207,13 +206,11 @@ def create_comparison_map(geojson_path="data/UK_Mainland_GB_simplified.geojson")
                        color='white', fontsize=12)
                 continue
             
-            # Create basemap with light blue land (like your reference)
             try:
                 uk = gpd.read_file(geojson_path)
                 uk.plot(ax=ax, linewidth=0.4, edgecolor="white", 
                        facecolor="lightblue", alpha=0.6)
                 
-                # Adjusted bounds to show full UK without cutoff
                 ax.set_xlim(-8.5, 2.2)   
                 ax.set_ylim(49.8, 61.0)  
                 ax.set_aspect("equal", adjustable="box")
@@ -227,26 +224,23 @@ def create_comparison_map(geojson_path="data/UK_Mainland_GB_simplified.geojson")
             # Calculate failure share and sizes
             share = np.divide(fail, tot, out=np.zeros_like(fail), where=tot > 0)
             max_total = max(1, np.percentile(tot, 95))
-            sizes = 8 + 40 * (tot / max_total)  # Smaller markers for cleaner look
+            sizes = 8 + 40 * (tot / max_total) 
             sizes = np.clip(sizes, 4, 60)
             
-            # Create scatter plot with no edge colors for clean look
+            # Create scatter plot 
             sc = ax.scatter(lons, lats, c=share, s=sizes,
                            cmap="Reds", vmin=0, vmax=1,
                            alpha=0.8, zorder=5)
             
-            # Set title with white text and better spacing
             ax.set_title(title, fontsize=16, fontweight="bold", 
                         pad=20, color='white')
             
-            # Complete removal of all axis elements for clean black background
             ax.set_xticks([])
             ax.set_yticks([])
             ax.set_xlabel('')
             ax.set_ylabel('')
             ax.grid(False)
             
-            # Make spines invisible
             for spine in ax.spines.values():
                 spine.set_visible(False)
             
@@ -264,7 +258,6 @@ def create_comparison_map(geojson_path="data/UK_Mainland_GB_simplified.geojson")
             for spine in ax.spines.values():
                 spine.set_visible(False)
     
-    # Adjust layout to minimize spacing between subplots
     fig.subplots_adjust(bottom=0.15, top=0.85, left=0.02, right=0.98, wspace=0.05)
     
     # Add horizontal colorbar with dark styling
@@ -278,7 +271,7 @@ def create_comparison_map(geojson_path="data/UK_Mainland_GB_simplified.geojson")
     cbar.outline.set_edgecolor('white')
     cbar.outline.set_linewidth(1)
     
-    # Save with black background and high DPI
+    # Save 
     plt.savefig('uk_maps_comparison_dark.png', bbox_inches="tight", dpi=1000, 
                facecolor='black', edgecolor='none')
     print("Saved comparison map to uk_maps_comparison_dark.png")

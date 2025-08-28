@@ -344,39 +344,3 @@ def travel_to_next_node(env, car_id, driver, graph, travel_time_per_km=0.75):
     
     print(f"[T={env.now:.1f}] Car {car_id}: Moved to node {next_node} (traveled {distance_km:.2f}km), SoC: {driver.get_state_of_charge():.2f} ({driver.battery_percentage:.0f}%)")
     
-
-# def find_nearest_nodes_with_stations(graph, current_node, max_distance=50, connector_type=None): 
-#     """
-#     Find nearest nodes with charging stations using weighted distances
-#     Optionally filter by connector compatibility
-    
-#     Args:
-#         graph: NetworkX graph with charging stations and weighted edges
-#         current_node: Current node position
-#         max_distance: Maximum distance to search (in km)
-#         connector_type: Optional connector type filter
-        
-#     Returns:
-#         list: List of tuples (node_id, distance_km) sorted by distance
-#     """
-#     nearby_stations = []
-    
-#     try:
-#         distances = nx.single_source_dijkstra_path_length(graph, current_node, cutoff=max_distance, weight='weight')
-        
-#         for node, distance in distances.items():
-#             if node != current_node and 'charging_stations' in graph.nodes[node]:
-#                 stations = graph.nodes[node]['charging_stations']
-#                 if stations:
-#                     # Apply connector filter if specified
-#                     if connector_type is None or has_compatible_connector(stations, connector_type):
-#                         nearby_stations.append((node, distance))
-        
-#         # Sort by distance
-#         nearby_stations.sort(key=lambda x: x[1])
-        
-#     except nx.NodeNotFound:
-#         print(f"Error: Node {current_node} not found in graph")
-#         pass
-    
-#     return nearby_stations

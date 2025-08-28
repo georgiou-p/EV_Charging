@@ -12,13 +12,13 @@ def add_weighted_targeted_failures(
     output_file: str,
     geojson_path: str,
     failure_rate: float = 0.10,
-    alpha: float = 1.6,         # centrality emphasis (↑ = sharper targeting)
+    alpha: float = 1.6,         # centrality emphasis (the higher the sharper targeting)
     decay_factor: float = 0.6,  # soft anti-clustering across a station (1.0 = none)
     rng_seed: int = 42
 ):
     """
-    Fail ~failure_rate of charging *points* by flipping whole connections (per your schema),
-    sampled stochastically with betweenness-based weights and a soft per-station decay
+    Fail ~failure_rate of charging *points* by flipping whole connections,
+    sampled stochastically with betweenness-based weights and per-station decay
     to reduce 'all-dead' stations.
 
     Parameters
@@ -132,7 +132,7 @@ def add_weighted_targeted_failures(
 
         chosen = available.pop(idx)
 
-        # flip this connection OFF (per your schema)
+        # flip this connection OFF 
         chosen["conn_ref"]["Working"] = False
         q = chosen["quantity"]
         failed_points += q

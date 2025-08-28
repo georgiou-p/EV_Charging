@@ -11,7 +11,7 @@ from haversine import haversine, Unit
 def assign_charging_stations_to_nodes(geojson_path, charging_data_path):
     """
     Assign charging stations to the nearest nodes in a graph created from UK districts.
-    Uses EVChargingStation class objects instead of dictionaries.
+    Uses EVChargingStation class objects 
     Graph edges are weighted by distance between centroids.
     
     Args:
@@ -42,7 +42,7 @@ def assign_charging_stations_to_nodes(geojson_path, charging_data_path):
         pos1 = positions[node1]  # (longitude, latitude)
         pos2 = positions[node2]  # (longitude, latitude)
         
-        # Calculate Haversine distance using library - expects (lat, lon) format
+        # Calculate Haversine distance using library
         distance_km = haversine((pos1[1], pos1[0]), (pos2[1], pos2[0]), unit=Unit.KILOMETERS)
         
         # Add distance as weight to the edge
@@ -77,7 +77,7 @@ def assign_charging_stations_to_nodes(geojson_path, charging_data_path):
             station = EVChargingStation.from_json(station_data)
             
             # Find nearest node using KDTree
-            station_coord = np.array([lon, lat])  # Note: lon, lat order for consistency
+            station_coord = np.array([lon, lat])  
             distance, nearest_node_idx = kdtree.query(station_coord)
             
             # Get the actual node ID

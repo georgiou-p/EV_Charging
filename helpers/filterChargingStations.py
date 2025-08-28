@@ -11,7 +11,6 @@ id_mapping = {
     2: 3      # CHAdeMO
 }
 
-# Load your data with UTF-8 encoding
 with open('data/uk_charging_stations_pretty.json', 'r', encoding='utf-8') as f:
     raw_data = json.load(f)
 
@@ -54,7 +53,7 @@ for station in raw_data:
     cleaned_data.append(station_entry)
     station_counter += 1
 
-# Save as JSON with UTF-8 encoding
+#Save
 with open("cleaned_charging_stations.json", "w", encoding='utf-8') as f:
     json.dump(cleaned_data, f, indent=4)
 

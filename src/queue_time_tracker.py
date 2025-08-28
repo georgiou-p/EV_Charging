@@ -6,7 +6,7 @@ class QueueTimeTracker:
     Tracks queue times by hour with quartile statistics
     """
     def __init__(self):
-        # Store queue times for each hour T1-T24 (indices 0-23)
+        # Store queue times for each hour T1-T24 
         self.hourly_queue_times = [[] for _ in range(24)]
         
         # Store driver counts for each hour
@@ -136,12 +136,12 @@ class QueueTimeTracker:
                     'Hour': hour_label,
                     'Hour_Number': hour_idx + 1,
                     'Simulation_Time': entry['time'],
-                    'Average_SoC': entry['avg_soc'],        # Individual sample SoC
+                    'Average_SoC': entry['avg_soc'],        
                     'Active_Drivers': entry['active_drivers'], # Drivers at this time
                     'Total_SoC': entry['total_soc']         # Sum of all SoCs
                 })
 
-        # Export detailed CSV if we have data
+        # Export detailed CSV 
         if all_detailed_data:
             detailed_df = pd.DataFrame(all_detailed_data)
             detailed_df.to_csv(detailed_filename, index=False)
@@ -178,11 +178,11 @@ class QueueTimeTracker:
         queue_start_time = simulation_time - queue_time_minutes
         queue_end_time = simulation_time
 
-        # Only filter out events that actually end after 24:00 (minute 1440)
+        # Only filter out events that actually end after 24:00 
         if queue_end_time >= 1440:
             print(f"DEBUG: Ignoring queue ending after T24 - started: {queue_start_time:.1f}, ended: {queue_end_time:.1f}, duration: {queue_time_minutes:.1f}")
             return
-        # Optionally: Also filter events that started before simulation began (negative start time)
+        #filter events that started before simulation began
         if queue_start_time < 0:
             print(f"DEBUG: Ignoring queue starting before simulation - started: {queue_start_time:.1f}, ended: {queue_end_time:.1f}, duration: {queue_time_minutes:.1f}")
             return
@@ -306,7 +306,7 @@ class QueueTimeTracker:
         q1_queue = np.array(q1_queue)
         q3_queue = np.array(q3_queue)
         
-        # Fill between Q1 and Q3 (interquartile range)
+        # Fill between Q1 and Q3 
         ax1.fill_between(x, q1_queue, q3_queue, alpha=0.3, color='lightcoral', 
                         label='Interquartile Range (Q1-Q3)')
         
@@ -326,7 +326,7 @@ class QueueTimeTracker:
                         marker='s', markersize=5, linestyle='-', alpha=0.8,
                         label='Active Drivers')
         
-        # Customize primary y-axis (queue times)
+        # Customize primary y-axis
         ax1.set_xlabel('Time of Day (T1–T24)', fontsize=14, fontweight='bold')
         ax1.set_ylabel('Queue Time (minutes)', fontsize=14, fontweight='bold', color='darkred')
         ax1.tick_params(axis='y', labelcolor='darkred')
@@ -346,7 +346,7 @@ class QueueTimeTracker:
         if max_queue > 60:
             ax1.axhline(y=60, color='red', linestyle=':', alpha=0.7, linewidth=2, label='60 min tolerance')
         
-        # Customize secondary y-axis (driver count)
+        # Customize secondary y-axis
         ax2.set_ylabel('Number of Active Drivers', fontsize=14, fontweight='bold', color='steelblue')
         ax2.tick_params(axis='y', labelcolor='steelblue')
         
@@ -417,9 +417,9 @@ def integrate_queue_tracking_with_simulation():
     
     class EnhancedSimulation:
         def __init__(self, graph, simulation_time=None):
-            # ... existing initialization ...
+        
             self.queue_tracker = QueueTimeTracker()
-            # ... rest of existing code ...
+         
         
         def record_queue_event(self, queue_time_minutes):
             """Call this whenever a car finishes queuing"""

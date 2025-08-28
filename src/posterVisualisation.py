@@ -28,7 +28,7 @@ def create_poster_map(geojson_path, figsize=(20, 24), dpi=300, save_path="uk_pos
     centroids = np.column_stack((map_regions.centroid.x, map_regions.centroid.y))
     print("Calculated region centroids")
     
-    # Create Queen adjacency graph (regions that share boundaries)
+    # Create Queen adjacency graph 
     print("Creating adjacency network...")
     queen = weights.Queen.from_dataframe(map_regions)
     graph = queen.to_networkx()
@@ -53,9 +53,9 @@ def create_poster_map(geojson_path, figsize=(20, 24), dpi=300, save_path="uk_pos
     # Plot the ward boundaries with light blue fill
     map_regions.plot(
         ax=ax, 
-        linewidth=0.3,           # Thin boundary lines
-        edgecolor="white",       # White boundaries between wards
-        facecolor="lightblue",   # Light blue fill
+        linewidth=0.3,           
+        edgecolor="white",      
+        facecolor="lightblue",   
         alpha=0.8               # Slight transparency
     )
     
@@ -64,18 +64,18 @@ def create_poster_map(geojson_path, figsize=(20, 24), dpi=300, save_path="uk_pos
         graph, 
         positions, 
         ax=ax,
-        edge_color='navy',       # Dark blue connections
-        alpha=0.4,              # Semi-transparent
-        width=0.3               # Thin but visible connection lines
+        edge_color='navy',       
+        alpha=0.4,              
+        width=0.3              
     )
     
-    # Optional: Plot centroids as small points
+    #Plot centroids as small points
     nx.draw_networkx_nodes(
         graph, 
         positions, 
         ax=ax,
-        node_color='darkblue',  # Dark blue dots
-        node_size=2,            # Small but visible points
+        node_color='darkblue', 
+        node_size=2,            
         alpha=0.6
     )
     
@@ -84,37 +84,37 @@ def create_poster_map(geojson_path, figsize=(20, 24), dpi=300, save_path="uk_pos
     ax.set_ylim(49.5, 61)       # Latitude range
     
     # Remove axes and make clean
-    ax.set_aspect('equal')      # Maintain geographic proportions
-    ax.axis('off')              # Remove axis labels and ticks
+    ax.set_aspect('equal')      
+    ax.axis('off')              
     
-    # Remove any padding around the map
+    
     plt.tight_layout()
     plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
     
     # Save as both SVG and JPEG formats
     print(f"Saving files in multiple formats...")
     
-    # Save as SVG (vector format) WITH centroids and edges
+    # Save as SVG 
     svg_path = save_path.replace('.png', '.svg')
     plt.savefig(
         svg_path,
         format='svg',
-        bbox_inches='tight',     # Remove extra whitespace
-        pad_inches=0,           # No padding
-        facecolor='white',      # White background
-        edgecolor='none'        # No border
+        bbox_inches='tight',     
+        pad_inches=0,          
+        facecolor='white',      
+        edgecolor='none'        
     )
     
-    # Save as JPEG (raster format) WITH centroids and edges
+    # Save as JPEG 
     jpeg_path = save_path.replace('.png', '.jpg')
     plt.savefig(
         jpeg_path,
         format='jpeg',
-        dpi=dpi,                # High resolution for quality
-        bbox_inches='tight',     # Remove extra whitespace
-        pad_inches=0,           # No padding
-        facecolor='white',      # White background
-        edgecolor='none'        # No border
+        dpi=dpi,               
+        bbox_inches='tight',     
+        pad_inches=0,           
+        facecolor='white',      
+        edgecolor='none'       
     )
     
     print(f"Files saved:")
@@ -150,17 +150,16 @@ def create_minimal_poster_map(geojson_path, figsize=(16, 20), dpi=300, save_path
     # Plot only the ward boundaries with very light styling
     map_regions.plot(
         ax=ax, 
-        linewidth=0.2,           # Very thin boundary lines
-        edgecolor="lightgray",   # Light gray boundaries
-        facecolor="lightblue",   # Light blue fill
-        alpha=0.3               # Very transparent for background use
+        linewidth=0.2,         
+        edgecolor="lightgray",  
+        facecolor="lightblue",  
+        alpha=0.3             
     )
     
     # Set the geographic bounds for UK
     ax.set_xlim(-8.5, 2.5)
     ax.set_ylim(49.5, 61)
-    
-    # Clean appearance
+
     ax.set_aspect('equal')
     ax.axis('off')
     
@@ -212,8 +211,8 @@ def main():
         # Create the main poster map with network connections
         fig1 = create_poster_map(
             geojson_path=geojson_path,
-            figsize=(20, 24),          # Large size for poster
-            dpi=300,                   # High resolution
+            figsize=(20, 24),         
+            dpi=300,                  
             save_path="uk_poster_detailed.png"
         )
         
@@ -223,8 +222,8 @@ def main():
         # Create a minimal version for background use
         fig2 = create_minimal_poster_map(
             geojson_path=geojson_path,
-            figsize=(16, 20),          # Poster proportions
-            dpi=300,                   # High resolution
+            figsize=(16, 20),         
+            dpi=300,                   
             save_path="uk_poster_minimal.png"
         )
         

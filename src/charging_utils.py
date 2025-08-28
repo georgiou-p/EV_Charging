@@ -51,7 +51,7 @@ def charge_at_station_with_queue_tolerance(env, car_id, target_node, target_stat
         print(f"[T={env.now:.1f}] Car {car_id}: Target station {target_station_id} not found")
         return False
     
-    # EQUIPMENT DISCOVERY PHASE - Check if target station has working compatible connections
+    #Check if target station has working compatible connections
     working_connections = target_station.get_working_connections(connector_type)
     chosen_station = None
     
@@ -111,7 +111,7 @@ def charge_at_station_with_queue_tolerance(env, car_id, target_node, target_stat
                     print(f"[T={env.now:.1f}] Car {car_id}: Alternative {station.get_station_id()}: {alt_queue_len} cars, {alt_wait_time:.1f} min, {alt_power}kW, score={score}")
         
         if alternative_options:
-            # Sort by score (highest first)
+            # Sort by score 
             alternative_options.sort(key=lambda x: x[1], reverse=True)
             best_alternative = alternative_options[0]
             

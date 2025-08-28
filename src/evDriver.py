@@ -14,7 +14,7 @@ class EVDriver:
         self.current_position_index = 0
         self.battery_capacity_km = battery_capacity_km
         
-        # Simple personal threshold (20-70% range)
+        # personal threshold (20-70% range)
         self.personal_threshold = self._sample_personal_threshold()
         
         # Energy and battery settings

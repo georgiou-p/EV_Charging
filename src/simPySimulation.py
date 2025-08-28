@@ -382,7 +382,7 @@ class SimpleEVSimulation:
             6.0, 5.0, 4.0, 3.0, 2.9, 2.5, 1.8, 1.2, 0.7, 0.5, 0.3, 0.3
         ]
         
-        # Convert simulation hours to simulation time units (assuming 1 hour = 60 time units)
+        # Convert simulation hours to simulation time units 
         time_units_per_hour = 60
         
         all_nodes = list(self.graph.nodes)

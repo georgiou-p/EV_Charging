@@ -141,7 +141,7 @@ def main():
     input_file = "./data/cleaned_charging_stations.json"
     output_file = "RandomFailuresChargingStations.json"
     
-    # Set random seed for reproducible results (optional)
+    # Set random seed for reproducible results 
     random.seed(42)
     
     try:
